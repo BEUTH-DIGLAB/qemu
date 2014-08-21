@@ -21,8 +21,42 @@
 #include "exec-all.h"
 #include "host-utils.h"
 
-//#define DEBUG_PCALL
+#define DBG_QSIM_LOCK
+#include "qsim-lock.h"
+#undef DBG_QSIM_LOCK
 
+#include "qsim-vm.h"
+#include "vm-func.h"
+
+#include <pthread.h>
+#include "qsim-context.h"
+
+extern atomic_cb_t qsim_atomic_cb;
+extern magic_cb_t  qsim_magic_cb;
+extern int_cb_t    qsim_int_cb;
+extern inst_cb_t   qsim_inst_cb;
+//extern mem_cb_t    qsim_mem_cb;
+extern io_cb_t     qsim_io_cb;
+extern reg_cb_t qsim_reg_cb;
+
+extern uint8_t  qsim_irq_vec;
+extern int      qsim_irq_pending;
+
+extern int qsim_cur_cpu, qsim_id;
+
+extern uint64_t qsim_icount;
+
+extern qsim_ucontext_t qemu_context;
+extern qsim_ucontext_t main_context;
+
+extern qemu_ramdesc_t *qsim_ram;
+extern qsim_lockstruct *qsim_ram_l;
+
+uint64_t qsim_eip, qsim_locked_addr;
+
+extern int qsim_memop_flag;
+
+//#define DEBUG_PCALL
 
 #ifdef DEBUG_PCALL
 #  define LOG_PCALL(...) qemu_log_mask(CPU_LOG_PCALL, ## __VA_ARGS__)
@@ -104,18 +138,35 @@ static const CPU86_LDouble f15rk[7] =
     3.32192809488736234781L,  /*l2t*/
 };
 
+#if 0
+int locks_held = 0;
+#define qsim_lock_addr(l, a) do { locks_held++; qsim_lock_addr((l), (a)); } while (0)
+#define qsim_alock_addr(l, a) do { locks_held++; qsim_alock_addr((l), (a)); } while (0)
+#define qsim_unlock_addr(l, a) do { locks_held--; qsim_unlock_addr((l), (a)); } while (0)
+#define qsim_aunlock_addr(l, a) do { locks_held--; qsim_aunlock_addr((l), (a)); } while (0)
+#endif
+
 /* broken thread support */
 
-static spinlock_t global_cpu_lock = SPIN_LOCK_UNLOCKED;
+static int atomic_flag = 0;
+static int atomic_locked;
+static uint64_t atomic_addr;
+static int nonatomic_locked = 0;
 
 void helper_lock(void)
 {
-    spin_lock(&global_cpu_lock);
+    atomic_flag = 1;
+    atomic_locked = 0;
+
+    // Suspend execution immediately if the atomic callback returns nonzero
+    if (qsim_atomic_cb && qsim_atomic_cb(qsim_id))
+      swapcontext(&qemu_context, &main_context);
 }
 
 void helper_unlock(void)
 {
-    spin_unlock(&global_cpu_lock);
+    atomic_flag = 0;
+    if (atomic_locked) qsim_aunlock_addr(qsim_ram_l, atomic_addr);
 }
 
 void helper_write_eflags(target_ulong t0, uint32_t update_mask)
@@ -136,21 +187,34 @@ target_ulong helper_read_eflags(void)
 static inline int load_segment(uint32_t *e1_ptr, uint32_t *e2_ptr,
                                int selector)
 {
+    int qsim_memop_bak = qsim_memop_flag, rval;
+    qsim_memop_flag = 0;
+
     SegmentCache *dt;
     int index;
     target_ulong ptr;
+
 
     if (selector & 0x4)
         dt = &env->ldt;
     else
         dt = &env->gdt;
+
     index = selector & ~7;
-    if ((index + 7) > dt->limit)
-        return -1;
+    if ((index + 7) > dt->limit) {
+      rval = -1;
+      goto ls_end;
+    }
     ptr = dt->base + index;
+    ldub_kernel(ptr + 3);
     *e1_ptr = ldl_kernel(ptr);
     *e2_ptr = ldl_kernel(ptr + 4);
-    return 0;
+
+    rval = 0;
+
+ ls_end:
+    qsim_memop_flag = qsim_memop_bak;
+    return rval;
 }
 
 static inline unsigned int get_seg_limit(uint32_t e1, uint32_t e2)
@@ -558,32 +622,47 @@ void helper_check_iol(uint32_t t0)
 
 void helper_outb(uint32_t port, uint32_t data)
 {
+    if (qsim_io_cb) qsim_io_cb(qsim_id, port, 1, 1, data);
     cpu_outb(port, data & 0xff);
 }
 
 target_ulong helper_inb(uint32_t port)
 {
-    return cpu_inb(port);
+    uint32_t *p;
+    if (qsim_io_cb) p = qsim_io_cb(qsim_id, port, 1, 0, 0);
+    else p = NULL;
+    if (!p) return cpu_inb(port);
+    else    return *p;
 }
 
 void helper_outw(uint32_t port, uint32_t data)
 {
+    if (qsim_io_cb) qsim_io_cb(qsim_id, port, 2, 1, data);
     cpu_outw(port, data & 0xffff);
 }
 
 target_ulong helper_inw(uint32_t port)
 {
-    return cpu_inw(port);
+    uint32_t *p;
+    if (qsim_io_cb) p = qsim_io_cb(qsim_id, port, 2, 0, 0);
+    else (p = NULL);
+    if (!p) return cpu_inw(port);
+    else    return *p;
 }
 
 void helper_outl(uint32_t port, uint32_t data)
 {
+    if (qsim_io_cb) qsim_io_cb(qsim_id, port, 4, 1, data);
     cpu_outl(port, data);
 }
 
 target_ulong helper_inl(uint32_t port)
 {
-    return cpu_inl(port);
+    uint32_t *p;
+    if (qsim_io_cb) p = qsim_io_cb(qsim_id, port, 4, 0, 0);
+    else p = NULL;
+    if (!p) return cpu_inl(port);
+    else    return *p;
 }
 
 static inline unsigned int get_sp_mask(unsigned int e2)
@@ -1211,6 +1290,18 @@ static void handle_even_inj(int intno, int is_int, int error_code,
 void do_interrupt(int intno, int is_int, int error_code,
                   target_ulong next_eip, int is_hw)
 {
+  qsim_memop_flag = 0;
+  if (atomic_flag) helper_unlock();
+  if (nonatomic_locked) {
+    qsim_unlock_addr(qsim_ram_l, qsim_locked_addr);
+    nonatomic_locked = 0;
+  }
+
+  if (qsim_int_cb != NULL && qsim_int_cb(qsim_id, intno) && is_int) {
+    env->eip = next_eip;
+    return;
+  }
+
     if (qemu_loglevel_mask(CPU_LOG_INT)) {
         if ((env->cr[0] & CR0_PE_MASK)) {
             static int count;
@@ -1930,13 +2021,23 @@ void helper_cpuid(void)
 {
     uint32_t eax, ebx, ecx, edx;
 
+    eax = (uint32_t)EAX;
+    eax &= 0xfffffff0;
+
+    if (qsim_magic_cb && qsim_magic_cb(qsim_id, EAX))
+      swapcontext(&qemu_context, &main_context);
+
     helper_svm_check_intercept_param(SVM_EXIT_CPUID, 0);
 
-    cpu_x86_cpuid(env, (uint32_t)EAX, (uint32_t)ECX, &eax, &ebx, &ecx, &edx);
-    EAX = eax;
-    EBX = ebx;
-    ECX = ecx;
-    EDX = edx;
+    /* Don't perform cpu_x86_cpuid if this is not a valid CPUID 
+      (it is a magic instruction; the magic callback might respond!) */
+    if ( eax == 0x40000000 || eax == 0x80000000 || eax == 0) {
+      cpu_x86_cpuid(env, (uint32_t)EAX, (uint32_t)ECX, &eax, &ebx, &ecx, &edx);
+      EAX = eax;
+      EBX = ebx;
+      ECX = ecx;
+      EDX = edx;
+    }
 }
 
 void helper_enter_level(int level, int data32, target_ulong t1)
@@ -2193,31 +2294,38 @@ void helper_ljmp_protected(int new_cs, target_ulong new_eip,
 
     if ((new_cs & 0xfffc) == 0)
         raise_exception_err(EXCP0D_GPF, 0);
-    if (load_segment(&e1, &e2, new_cs) != 0)
+    if (load_segment(&e1, &e2, new_cs) != 0) {
         raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
+    }
     cpl = env->hflags & HF_CPL_MASK;
     if (e2 & DESC_S_MASK) {
-        if (!(e2 & DESC_CS_MASK))
+      if (!(e2 & DESC_CS_MASK)) {
             raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
+      }
         dpl = (e2 >> DESC_DPL_SHIFT) & 3;
         if (e2 & DESC_C_MASK) {
             /* conforming code segment */
-            if (dpl > cpl)
+	  if (dpl > cpl) {
                 raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
+	  }
         } else {
             /* non conforming code segment */
             rpl = new_cs & 3;
-            if (rpl > cpl)
+            if (rpl > cpl) {
                 raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
-            if (dpl != cpl)
+	    }
+            if (dpl != cpl) {
                 raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
+	    }
         }
-        if (!(e2 & DESC_P_MASK))
+        if (!(e2 & DESC_P_MASK)) {
             raise_exception_err(EXCP0B_NOSEG, new_cs & 0xfffc);
+	}
         limit = get_seg_limit(e1, e2);
         if (new_eip > limit &&
-            !(env->hflags & HF_LMA_MASK) && !(e2 & DESC_L_MASK))
+            !(env->hflags & HF_LMA_MASK) && !(e2 & DESC_L_MASK)) {
             raise_exception_err(EXCP0D_GPF, new_cs & 0xfffc);
+	}
         cpu_x86_load_seg_cache(env, R_CS, (new_cs & 0xfffc) | cpl,
                        get_seg_base(e1, e2), limit, e2);
         EIP = new_eip;
@@ -2943,6 +3051,7 @@ void helper_lmsw(target_ulong t0)
     helper_write_crN(0, t0);
 }
 
+// TSC disabled for QSIM; returns zero.
 void helper_clts(void)
 {
     env->cr[0] &= ~CR0_TS_MASK;
@@ -2964,7 +3073,7 @@ void helper_rdtsc(void)
     }
     helper_svm_check_intercept_param(SVM_EXIT_RDTSC, 0);
 
-    val = cpu_get_tsc(env) + env->tsc_offset;
+    val = /*cpu_get_tsc(env) + env->tsc_offset*/0;
     EAX = (uint32_t)(val);
     EDX = (uint32_t)(val >> 32);
 }
@@ -3002,6 +3111,9 @@ void helper_wrmsr(void)
     helper_svm_check_intercept_param(SVM_EXIT_MSR, 1);
 
     val = ((uint32_t)EAX) | ((uint64_t)((uint32_t)EDX) << 32);
+
+    printf("MSR Write 0x%08x, val=%08llx\n",
+           (unsigned)ECX, (((unsigned long long)(unsigned)EDX)<<32)|EAX);
 
     switch((uint32_t)ECX) {
     case MSR_IA32_SYSENTER_CS:
@@ -3135,6 +3247,8 @@ void helper_rdmsr(void)
     uint64_t val;
 
     helper_svm_check_intercept_param(SVM_EXIT_MSR, 0);
+
+    printf("MSR Read 0x%08x\n", (unsigned)ECX);
 
     switch((uint32_t)ECX) {
     case MSR_IA32_SYSENTER_CS:
@@ -5655,4 +5769,357 @@ uint32_t helper_cc_compute_c(int op)
     case CC_OP_SARQ: return compute_c_sarl();
 #endif
     }
+}
+
+target_ulong helper_inst_callback(target_ulong vaddr, target_ulong 
+                                  length, target_ulong type)
+{
+  if (atomic_flag || nonatomic_locked) {
+    printf("!!!! %p: Inst helper while holding lock. !!!!\n", (void*)qsim_eip);
+  }
+
+  if (atomic_flag && atomic_locked) {
+    qsim_aunlock_addr(qsim_ram_l, qsim_phys_addr);
+    atomic_flag = atomic_locked = 0;
+  }
+
+  if (nonatomic_locked) {
+    qsim_unlock_addr(qsim_ram_l, qsim_locked_addr);
+    nonatomic_locked = 0;
+  }
+
+  while (qsim_icount == 0) {
+    swapcontext(&qemu_context, &main_context);
+  }
+
+  qsim_eip = vaddr;
+
+  qsim_icount--;
+
+  if (qsim_inst_cb != NULL) {
+      qsim_memop_flag = 1;
+      ldub_code(vaddr);
+      qsim_memop_flag = 0;
+      // Using our own now because qemu_ram_addr_from_host had some weird
+      // results.
+      qsim_phys_addr = qsim_ram_addr_from_host((void *)qsim_host_addr);
+      qsim_inst_cb(qsim_id, 
+                   vaddr, 
+                   qsim_phys_addr,
+                   length, 
+                   (uint8_t*)qsim_host_addr,
+                   type
+      );
+  }
+  return 0;
+}
+
+static void memop_callback(target_ulong adr, 
+                                  target_ulong size, 
+                                  int type) 
+{
+  if (qsim_mem_cb) {
+    // Handle unaligned page-crossing accessess as a series of aligned accesses.
+    if ((size-1)&adr && (adr&0xfff)+size >= 0x1000) {
+      memop_callback(adr,          size/2, type);
+      memop_callback(adr + size/2, size/2, type);
+    } else {
+      __ldb_mmu(adr, 0);
+      qsim_phys_addr = qsim_ram_addr_from_host((void *)qsim_host_addr);
+      if (qsim_mem_cb(qsim_id, adr, qsim_phys_addr, size, type))
+	swapcontext(&qemu_context, &main_context);
+    }
+  }
+}
+
+target_ulong helper_store_callback_pre(target_ulong vaddr, 
+                                   target_ulong size, 
+                                   target_ulong data) 
+{
+  qsim_memop_flag = 1;
+
+  __ldb_mmu(vaddr, 0);
+  qsim_phys_addr = qsim_ram_addr_from_host((void *)qsim_host_addr);
+
+  if (atomic_flag && !atomic_locked) {
+    atomic_locked = 1;
+    atomic_addr = qsim_phys_addr;
+    qsim_alock_addr(qsim_ram_l, qsim_phys_addr);
+  } else if (!atomic_flag) {
+    qsim_lock_addr(qsim_ram_l, qsim_phys_addr);
+    qsim_locked_addr = qsim_phys_addr;
+    nonatomic_locked = 1;
+  }
+
+  return 0;
+}
+
+target_ulong helper_load_callback_pre(target_ulong vaddr, target_ulong size) 
+{
+  qsim_memop_flag = 1;
+
+  __ldb_mmu(vaddr, 0);
+  qsim_phys_addr = qsim_ram_addr_from_host((void *)qsim_host_addr);
+
+  if (atomic_flag && !atomic_locked) {
+    atomic_locked = 1;
+    atomic_addr = qsim_phys_addr;
+    qsim_alock_addr(qsim_ram_l, qsim_phys_addr);
+  } else if (!atomic_flag) {
+    qsim_lock_addr(qsim_ram_l, qsim_phys_addr);
+    qsim_locked_addr = qsim_phys_addr;
+    nonatomic_locked = 1;
+  }
+
+  memop_callback(vaddr, size, 0);
+
+  return 0;
+}
+
+target_ulong helper_store_callback_post(target_ulong vaddr,
+				       target_ulong size,
+				       target_ulong data)
+{
+  memop_callback(vaddr, size, 1);
+
+  if (nonatomic_locked) {
+    qsim_unlock_addr(qsim_ram_l, qsim_locked_addr);
+    nonatomic_locked = 0;
+  }
+
+  qsim_memop_flag = 0;
+
+  return 0;
+}
+
+target_ulong helper_load_callback_post(target_ulong vaddr, target_ulong size)
+{
+  if (nonatomic_locked) {
+    qsim_unlock_addr(qsim_ram_l, qsim_locked_addr);
+    nonatomic_locked = 0;
+  }
+
+  qsim_memop_flag = 0;
+
+  return 0;
+}
+
+
+uint8_t mem_rd(uint64_t paddr) {
+  int bak = qsim_memop_flag;
+  qsim_memop_flag = 1;
+  uint8_t b = ldub_phys(paddr); // ldub_kernel(vaddr)*/0;
+  qsim_memop_flag = bak;
+  return b;
+}
+
+void mem_wr(uint64_t paddr, uint8_t value) {
+  int bak = qsim_memop_flag;
+  qsim_memop_flag = 1;
+  stb_phys(paddr, value);
+  qsim_memop_flag = bak;
+}
+
+uint8_t mem_rd_virt(uint64_t vaddr) {
+  // This is known to fail on guest operating systems that support the NX bit.
+  int bak = qsim_memop_flag;
+  qsim_memop_flag = 1;
+  char b = ldub_code(vaddr);
+  qsim_memop_flag = bak;
+  return b;
+}
+
+void mem_wr_virt(uint64_t vaddr, uint8_t value) {
+  // This is known to fail on guest operating systems that support the NX bit.
+  int bak = qsim_memop_flag;
+  qsim_memop_flag = 1;
+  ldub_code(vaddr); // discard result but get the host address
+  (*(uint8_t *)qsim_host_addr) = value;
+  qsim_memop_flag = bak;
+}
+
+target_ulong helper_reg_read_callback(target_ulong reg, target_ulong size) {
+  if (qsim_reg_cb) qsim_reg_cb(qsim_id, reg, size, 0);
+  return 0;
+}
+
+target_ulong helper_reg_write_callback(target_ulong reg, target_ulong size) {
+  if (qsim_reg_cb) qsim_reg_cb(qsim_id, reg, size, 1);
+  return 0;
+}
+
+uint64_t get_reg(enum regs r) {
+  switch (r) {
+  case QSIM_RAX:    return first_cpu->regs[R_EAX];
+  case QSIM_RCX:    return first_cpu->regs[R_ECX];
+  case QSIM_RDX:    return first_cpu->regs[R_EDX];
+  case QSIM_RBX:    return first_cpu->regs[R_EBX];
+  case QSIM_RSP:    return first_cpu->regs[R_ESP];
+  case QSIM_RBP:    return first_cpu->regs[R_EBP];
+  case QSIM_RSI:    return first_cpu->regs[R_ESI];
+  case QSIM_RDI:    return first_cpu->regs[R_EDI];
+  case QSIM_FP0:    return first_cpu->fpregs[0].mmx.q;
+  case QSIM_FP1:    return first_cpu->fpregs[1].mmx.q;
+  case QSIM_FP2:    return first_cpu->fpregs[2].mmx.q;
+  case QSIM_FP3:    return first_cpu->fpregs[3].mmx.q;
+  case QSIM_FP4:    return first_cpu->fpregs[4].mmx.q;
+  case QSIM_FP5:    return first_cpu->fpregs[5].mmx.q;
+  case QSIM_FP6:    return first_cpu->fpregs[6].mmx.q;
+  case QSIM_FP7:    return first_cpu->fpregs[7].mmx.q;
+  case QSIM_FPSP:   return first_cpu->fpstt;
+  case QSIM_ES :    return first_cpu->segs[R_ES ].selector;
+  case QSIM_ESB:    return first_cpu->segs[R_ES ].base;
+  case QSIM_ESL:    return first_cpu->segs[R_ES ].limit;
+  case QSIM_ESF:    return first_cpu->segs[R_ES ].flags;
+  case QSIM_CS :    return first_cpu->segs[R_CS ].selector;
+  case QSIM_CSB:    return first_cpu->segs[R_CS ].base;
+  case QSIM_CSL:    return first_cpu->segs[R_CS ].limit;
+  case QSIM_CSF:    return first_cpu->segs[R_CS ].flags;
+  case QSIM_SS :    return first_cpu->segs[R_SS ].selector;
+  case QSIM_SSB:    return first_cpu->segs[R_SS ].base;
+  case QSIM_SSL:    return first_cpu->segs[R_SS ].limit;
+  case QSIM_SSF:    return first_cpu->segs[R_SS ].flags;
+  case QSIM_DS :    return first_cpu->segs[R_DS ].selector;
+  case QSIM_DSB:    return first_cpu->segs[R_DS ].base;
+  case QSIM_DSL:    return first_cpu->segs[R_DS ].limit;
+  case QSIM_DSF:    return first_cpu->segs[R_DS ].flags;
+  case QSIM_FS :    return first_cpu->segs[R_FS ].selector;
+  case QSIM_FSB:    return first_cpu->segs[R_FS ].base;
+  case QSIM_FSL:    return first_cpu->segs[R_FS ].limit;
+  case QSIM_FSF:    return first_cpu->segs[R_FS ].flags;
+  case QSIM_GS :    return first_cpu->segs[R_GS ].selector;
+  case QSIM_GSB:    return first_cpu->segs[R_GS ].base;
+  case QSIM_GSL:    return first_cpu->segs[R_GS ].limit;
+  case QSIM_GSF:    return first_cpu->segs[R_GS ].flags;
+  case QSIM_RIP:    return qsim_eip;
+  case QSIM_CR0:    return first_cpu->cr  [0    ];
+  case QSIM_CR2:    return first_cpu->cr  [2    ];
+  case QSIM_CR3:    return first_cpu->cr  [3    ];
+  case QSIM_CR4:    return first_cpu->cr  [4    ];
+  case QSIM_RFLAGS: { uint64_t r14_val = env, rval;
+                      env = first_cpu; 
+                      rval = compute_eflags();
+                      env = r14_val;
+                      return rval; }
+  case QSIM_GDTB:   return first_cpu->gdt.base;
+  case QSIM_IDTB:   return first_cpu->idt.base;
+  case QSIM_GDTL:   return first_cpu->gdt.limit;
+  case QSIM_IDTL:   return first_cpu->idt.limit;
+  case QSIM_TR:     return first_cpu->tr.selector;
+  case QSIM_TRB:    return first_cpu->tr.base;
+  case QSIM_TRL:    return first_cpu->tr.limit;
+  case QSIM_TRF:    return first_cpu->tr.flags;
+  case QSIM_LDT:    return first_cpu->ldt.selector;
+  case QSIM_LDTB:   return first_cpu->ldt.base;
+  case QSIM_LDTL:   return first_cpu->ldt.limit;
+  case QSIM_LDTF:   return first_cpu->ldt.flags;
+  case QSIM_DR6:    return first_cpu->dr[6];
+  case QSIM_DR7:    return first_cpu->dr[7];
+  case QSIM_HFLAGS: return first_cpu->hflags;
+  case QSIM_HFLAGS2:return first_cpu->hflags2;
+  case QSIM_SE_CS:  return first_cpu->sysenter_cs;
+  case QSIM_SE_SP:  return first_cpu->sysenter_esp;
+  case QSIM_SE_IP:  return first_cpu->sysenter_eip;
+  default       :   return 0xbadbadbadbadbadbULL;
+  }
+} 
+
+static inline void qsim_update_seg(int seg) {
+  cpu_x86_load_seg_cache(first_cpu, seg, 
+                         first_cpu->segs[seg].selector,
+                         first_cpu->segs[seg].base,
+                         first_cpu->segs[seg].limit,
+                         first_cpu->segs[seg].flags);
+}
+
+void set_reg(enum regs r, uint64_t val) {
+  uint64_t r14_val = env;
+
+  switch (r) {
+  case QSIM_RAX:    first_cpu->regs[R_EAX]          = val;      break;
+  case QSIM_RCX:    first_cpu->regs[R_ECX]          = val;      break;
+  case QSIM_RDX:    first_cpu->regs[R_EDX]          = val;      break;
+  case QSIM_RBX:    first_cpu->regs[R_EBX]          = val;      break;
+  case QSIM_RSP:    first_cpu->regs[R_ESP]          = val;      break;
+  case QSIM_RBP:    first_cpu->regs[R_EBP]          = val;      break;
+  case QSIM_RSI:    first_cpu->regs[R_ESI]          = val;      break;
+  case QSIM_RDI:    first_cpu->regs[R_EDI]          = val;      break;
+  case QSIM_FP0:    first_cpu->fpregs[0].mmx.q      = val;      break;
+  case QSIM_FP1:    first_cpu->fpregs[1].mmx.q      = val;      break;
+  case QSIM_FP2:    first_cpu->fpregs[2].mmx.q      = val;      break;
+  case QSIM_FP3:    first_cpu->fpregs[3].mmx.q      = val;      break;
+  case QSIM_FP4:    first_cpu->fpregs[4].mmx.q      = val;      break;
+  case QSIM_FP5:    first_cpu->fpregs[5].mmx.q      = val;      break;
+  case QSIM_FP6:    first_cpu->fpregs[6].mmx.q      = val;      break;
+  case QSIM_FP7:    first_cpu->fpregs[7].mmx.q      = val;      break;
+  case QSIM_FPSP:   first_cpu->fpstt                = val;      break;
+  case QSIM_ES :    first_cpu->segs[R_ES ].selector = val;      break;
+  case QSIM_ESB:    first_cpu->segs[R_ES ].base     = val;      break;
+  case QSIM_ESL:    first_cpu->segs[R_ES ].limit    = val;      break;
+  case QSIM_ESF:    first_cpu->segs[R_ES ].flags    = val;
+                    qsim_update_seg(R_ES);                      break;
+  case QSIM_CS :    first_cpu->segs[R_CS ].selector = val;
+                    first_cpu->segs[R_CS ].base     = val << 4; break;
+  case QSIM_CSB:    first_cpu->segs[R_CS ].base     = val;      break;
+  case QSIM_CSL:    first_cpu->segs[R_CS ].limit    = val;      break;
+  case QSIM_CSF:    first_cpu->segs[R_CS ].flags    = val;
+                    qsim_update_seg(R_CS);                      break;
+  case QSIM_SS :    first_cpu->segs[R_SS ].selector = val;
+                    first_cpu->segs[R_SS ].base     = val << 4; break;
+  case QSIM_SSB:    first_cpu->segs[R_SS ].base     = val;      break;
+  case QSIM_SSL:    first_cpu->segs[R_SS ].limit    = val;      break;
+  case QSIM_SSF:    first_cpu->segs[R_SS ].flags    = val;
+                    qsim_update_seg(R_SS);                      break;
+  case QSIM_DS :    first_cpu->segs[R_DS ].selector = val;
+                    first_cpu->segs[R_DS ].base     = val << 4; break;
+  case QSIM_DSB:    first_cpu->segs[R_DS ].base     = val;      break;
+  case QSIM_DSL:    first_cpu->segs[R_DS ].limit    = val;      break;
+  case QSIM_DSF:    first_cpu->segs[R_DS ].flags    = val;
+                    qsim_update_seg(R_DS);                      break;
+  case QSIM_FS :    first_cpu->segs[R_FS ].selector = val;
+                    first_cpu->segs[R_FS ].base     = val << 4; break;
+  case QSIM_FSB:    first_cpu->segs[R_FS ].base     = val;      break;
+  case QSIM_FSL:    first_cpu->segs[R_FS ].limit    = val;      break;
+  case QSIM_FSF:    first_cpu->segs[R_FS ].flags    = val;
+                    qsim_update_seg(R_FS);                      break;
+  case QSIM_GS :    first_cpu->segs[R_GS ].selector = val;
+                    first_cpu->segs[R_GS ].base     = val << 4; break;
+  case QSIM_GSB:    first_cpu->segs[R_GS ].base     = val;      break;
+  case QSIM_GSL:    first_cpu->segs[R_GS ].limit    = val;      break;
+  case QSIM_GSF:    first_cpu->segs[R_GS ].flags    = val;
+                    qsim_update_seg(R_GS);                      break;
+  case QSIM_RIP:    first_cpu->eip                  = val;      break;
+  case QSIM_CR0:    env = first_cpu;
+                    helper_write_crN(0, val);                   break;
+  case QSIM_CR2:    env = first_cpu; 
+                    helper_write_crN(2, val);                   break;
+  case QSIM_CR3:    env = first_cpu;
+                    helper_write_crN(3, val);                   break;
+  case QSIM_CR4:    env = first_cpu;
+                    helper_write_crN(4, val);                   break;
+  case QSIM_GDTB:   first_cpu->gdt.base             = val;      break;
+  case QSIM_GDTL:   first_cpu->gdt.limit            = val;      break;
+  case QSIM_IDTB:   first_cpu->idt.base             = val;      break;
+  case QSIM_IDTL:   first_cpu->idt.limit            = val;      break;
+  case QSIM_RFLAGS: env = first_cpu;
+                    load_eflags(val,
+                      ~(CC_O | CC_S | CC_Z | CC_A | CC_P | CC_C | DF_MASK));
+                                                                break;
+  case QSIM_TR:     first_cpu->tr.selector          = val;      break;
+  case QSIM_TRB:    first_cpu->tr.base              = val;      break;
+  case QSIM_TRL:    first_cpu->tr.limit             = val;      break;
+  case QSIM_TRF:    first_cpu->tr.flags             = val;      break;
+  case QSIM_LDT:    first_cpu->ldt.selector         = val;      break;
+  case QSIM_LDTB:   first_cpu->ldt.base             = val;      break;
+  case QSIM_LDTL:   first_cpu->ldt.limit            = val;      break;
+  case QSIM_LDTF:   first_cpu->ldt.flags            = val;      break;
+  case QSIM_DR6:    first_cpu->dr[6]                = val;      break;
+  case QSIM_DR7:    first_cpu->dr[7]                = val;      break;
+  case QSIM_HFLAGS: first_cpu->hflags               = val;      break;
+  case QSIM_HFLAGS2:first_cpu->hflags2              = val;      break;
+  case QSIM_SE_CS:  first_cpu->sysenter_cs          = val;      break;
+  case QSIM_SE_SP:  first_cpu->sysenter_esp         = val;      break;
+  case QSIM_SE_IP:  first_cpu->sysenter_eip         = val;      break;
+  }
+  env = r14_val;
 }

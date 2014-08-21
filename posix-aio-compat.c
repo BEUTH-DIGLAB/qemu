@@ -368,6 +368,9 @@ static void spawn_thread(void)
 {
     sigset_t set, oldset;
 
+    fprintf(stderr, "Invalid call.");
+    exit(1);
+
     cur_threads++;
     idle_threads++;
 

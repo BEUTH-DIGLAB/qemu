@@ -38,6 +38,10 @@
 #endif
 #endif
 
+extern int             qsim_cur_cpu, qsim_id, qsim_irq_pending;
+extern uint8_t         qsim_irq_vec;
+extern pthread_mutex_t qsim_irq_lock;
+
 #if defined(__sparc__) && !defined(CONFIG_SOLARIS)
 // Work around ugly bugs in glibc that mangle global register contents
 #undef env
@@ -83,9 +87,9 @@ void cpu_resume_from_signal(CPUState *env1, void *puc)
     if (puc) {
         /* XXX: use siglongjmp ? */
 #ifdef __linux__
-        sigprocmask(SIG_SETMASK, &uc->uc_sigmask, NULL);
+      //sigprocmask(SIG_SETMASK, &uc->uc_sigmask, NULL);
 #elif defined(__OpenBSD__)
-        sigprocmask(SIG_SETMASK, &uc->sc_mask, NULL);
+      //sigprocmask(SIG_SETMASK, &uc->sc_mask, NULL);
 #endif
     }
 #endif
@@ -390,7 +394,14 @@ int cpu_exec(CPUState *env1)
                             int intno;
                             svm_check_intercept(SVM_EXIT_INTR);
                             env->interrupt_request &= ~(CPU_INTERRUPT_HARD | CPU_INTERRUPT_VIRQ);
-                            intno = cpu_get_pic_interrupt(env);
+			    pthread_mutex_lock(&qsim_irq_lock);
+                            if (qsim_irq_pending) {
+			      intno = qsim_irq_vec;
+                              qsim_irq_pending = 0;
+			      } else {
+                              intno = cpu_get_pic_interrupt(env);
+			    }
+			    pthread_mutex_unlock(&qsim_irq_lock);
                             qemu_log_mask(CPU_LOG_TB_IN_ASM, "Servicing hardware INT=0x%02x\n", intno);
 #if defined(__sparc__) && !defined(CONFIG_SOLARIS)
 #undef env
@@ -793,7 +804,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    //sigprocmask(SIG_SETMASK, old_set, NULL);
     EXCEPTION_ACTION;
 
     /* never comes here */

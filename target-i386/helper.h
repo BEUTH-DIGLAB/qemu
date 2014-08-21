@@ -1,4 +1,5 @@
 #include "def-helper.h"
+#include <stdint.h>
 
 DEF_HELPER_FLAGS_1(cc_compute_all, TCG_CALL_PURE, i32, int)
 DEF_HELPER_FLAGS_1(cc_compute_c, TCG_CALL_PURE, i32, int)
@@ -216,5 +217,14 @@ DEF_HELPER_2(rcrl, tl, tl, tl)
 DEF_HELPER_2(rclq, tl, tl, tl)
 DEF_HELPER_2(rcrq, tl, tl, tl)
 #endif
+
+/* QSim */
+DEF_HELPER_3(inst_callback, tl, tl, tl, tl)
+DEF_HELPER_2(reg_read_callback, tl, tl, tl)
+DEF_HELPER_2(reg_write_callback, tl, tl, tl)
+DEF_HELPER_2(load_callback_pre, tl, tl, tl)
+DEF_HELPER_2(load_callback_post, tl, tl, tl)
+DEF_HELPER_3(store_callback_pre, tl, tl, tl, tl)
+DEF_HELPER_3(store_callback_post, tl, tl, tl, tl)
 
 #include "def-helper.h"

@@ -185,7 +185,7 @@ static void apic_local_deliver(CPUState *env, int vector)
 void apic_deliver_pic_intr(CPUState *env, int level)
 {
     if (level)
-        apic_local_deliver(env, APIC_LVT_LINT0);
+      ;//apic_local_deliver(env, APIC_LVT_LINT0);
     else {
         APICState *s = env->apic_state;
         uint32_t lvt = s->lvt[APIC_LVT_LINT0];
@@ -287,8 +287,8 @@ void apic_deliver_irq(uint8_t dest, uint8_t dest_mode,
     uint32_t deliver_bitmask[MAX_APIC_WORDS];
 
     apic_get_delivery_bitmask(deliver_bitmask, dest, dest_mode);
-    apic_bus_deliver(deliver_bitmask, delivery_mode, vector_num, polarity,
-                     trigger_mode);
+    //apic_bus_deliver(deliver_bitmask, delivery_mode, vector_num, polarity,
+    //                 trigger_mode);
 }
 
 void cpu_set_apic_base(CPUState *env, uint64_t val)
@@ -343,7 +343,7 @@ static int get_highest_priority_int(uint32_t *tab)
             return i * 32 + fls_bit(tab[i]);
         }
     }
-    return -1;
+    return -11;
 }
 
 static int apic_get_ppr(APICState *s)
@@ -565,8 +565,8 @@ static void apic_deliver(APICState *s, uint8_t dest, uint8_t dest_mode,
             return;
     }
 
-    apic_bus_deliver(deliver_bitmask, delivery_mode, vector_num, polarity,
-                     trigger_mode);
+    //apic_bus_deliver(deliver_bitmask, delivery_mode, vector_num, polarity,
+    //                 trigger_mode);
 }
 
 int apic_get_interrupt(CPUState *env)
@@ -645,11 +645,11 @@ static void apic_timer_update(APICState *s, int64_t current_time)
             d = (uint64_t)s->initial_count + 1;
         }
         next_time = s->initial_count_load_time + (d << s->count_shift);
-        qemu_mod_timer(s->timer, next_time);
+        //qemu_mod_timer(s->timer, next_time);
         s->next_time = next_time;
     } else {
-    no_timer:
-        qemu_del_timer(s->timer);
+    no_timer:;
+      //qemu_del_timer(s->timer);
     }
 }
 
@@ -657,7 +657,7 @@ static void apic_timer(void *opaque)
 {
     APICState *s = opaque;
 
-    apic_local_deliver(s->cpu_env, APIC_LVT_TIMER);
+    //apic_local_deliver(s->cpu_env, APIC_LVT_TIMER);
     apic_timer_update(s, s->next_time);
 }
 
@@ -757,7 +757,7 @@ static uint32_t apic_mem_readl(void *opaque, target_phys_addr_t addr)
 #ifdef DEBUG_APIC
     printf("APIC read: %08x = %08x\n", (uint32_t)addr, val);
 #endif
-    return val;
+    return /*val*/0;
 }
 
 static void apic_send_msi(target_phys_addr_t addr, uint32 data)
@@ -775,6 +775,7 @@ static void apic_mem_writel(void *opaque, target_phys_addr_t addr, uint32_t val)
 {
     CPUState *env;
     APICState *s;
+
     int index = (addr >> 4) & 0xff;
     if (addr > 0xfff || !index) {
         /* MSI and MMIO APIC are at the same memory location,
@@ -899,7 +900,7 @@ static int apic_load_old(QEMUFile *f, void *opaque, int version_id)
     s->next_time=qemu_get_be64(f);
 
     if (version_id >= 2)
-        qemu_get_timer(f, s->timer);
+      ;//qemu_get_timer(f, s->timer);
     return 0;
 }
 
@@ -993,7 +994,7 @@ int apic_init(CPUState *env)
         cpu_register_physical_memory(MSI_ADDR_BASE, MSI_ADDR_SIZE,
                                      apic_io_memory);
     }
-    s->timer = qemu_new_timer(vm_clock, apic_timer, s);
+    //s->timer = qemu_new_timer(vm_clock, apic_timer, s);
 
     vmstate_register(s->idx, &vmstate_apic, s);
     qemu_register_reset(apic_reset, s);

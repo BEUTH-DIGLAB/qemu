@@ -42,6 +42,13 @@
 #include <qemu.h>
 #endif
 
+#define QSIM_DEFS
+#include "qsim-vm.h"
+#include "qsim-context.h"
+
+extern qsim_ucontext_t qemu_context;
+extern qsim_ucontext_t main_context;
+
 //#define DEBUG_TB_INVALIDATE
 //#define DEBUG_FLUSH
 //#define DEBUG_TLB
@@ -237,6 +244,19 @@ static void map_exec(void *addr, long size)
 }
 #endif
 
+extern int qsim_memop_flag, qsim_id;
+int qsim_memop_recursed = 0;
+
+void qsim_memop_phys(uint64_t adr, uint64_t size, int type) {
+  if (!qsim_memop_recursed && !qsim_memop_flag) {
+    qsim_memop_recursed = 1;
+    if (qsim_mem_cb)
+      if (qsim_mem_cb(qsim_id, 0, adr, size, type))
+        swapcontext(&qemu_context, &main_context);
+    qsim_memop_recursed = 0;
+  }
+}
+
 static void page_init(void)
 {
     /* NOTE: we can always suppose that qemu_host_page_size >=
@@ -398,7 +418,7 @@ static void tlb_unprotect_code_phys(CPUState *env, ram_addr_t ram_addr,
 #define mmap_unlock() do { } while(0)
 #endif
 
-#define DEFAULT_CODE_GEN_BUFFER_SIZE (32 * 1024 * 1024)
+#define DEFAULT_CODE_GEN_BUFFER_SIZE (256 * 1024 * 1024)
 
 #if defined(CONFIG_USER_ONLY)
 /* Currently it is not recommended to allocate big chunks of data in
@@ -438,7 +458,7 @@ static void code_gen_alloc(unsigned long tb_size)
 
         flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #if defined(__x86_64__)
-        flags |= MAP_32BIT;
+        // flags |= MAP_32BIT; //QSIM: We shouldn't need this.
         /* Cannot map more than that */
         if (code_gen_buffer_size > (800 * 1024 * 1024))
             code_gen_buffer_size = (800 * 1024 * 1024);
@@ -2404,6 +2424,34 @@ void qemu_unregister_coalesced_mmio(target_phys_addr_t addr, ram_addr_t size)
         kvm_uncoalesce_mmio_region(addr, size);
 }
 
+ram_addr_t qemu_ram_share(ram_addr_t size, void* ptr)
+{
+  RAMBlock *new_block;
+
+  size = TARGET_PAGE_ALIGN(size);
+  new_block = qemu_malloc(sizeof(*new_block));
+
+  new_block->host = ptr;
+
+  new_block->offset = last_ram_offset;
+  new_block->length = size;
+
+  new_block->next = ram_blocks;
+  ram_blocks = new_block;
+
+  phys_ram_dirty = qemu_realloc(phys_ram_dirty,
+                                (last_ram_offset + size) >> TARGET_PAGE_BITS);
+  memset(phys_ram_dirty + (last_ram_offset >> TARGET_PAGE_BITS),
+         0xff, size >> TARGET_PAGE_BITS);
+
+  last_ram_offset += size;
+
+  if (kvm_enabled())
+    kvm_setup_guest_memory(new_block->host, size);
+
+  return new_block->offset;
+}
+
 ram_addr_t qemu_ram_alloc(ram_addr_t size)
 {
     RAMBlock *new_block;
@@ -3042,6 +3090,8 @@ void cpu_physical_memory_rw(target_phys_addr_t addr, uint8_t *buf,
     unsigned long pd;
     PhysPageDesc *p;
 
+    // printf("%x %c %d\n", (unsigned)addr, (is_write?'W':'R'), len);
+
     while (len > 0) {
         page = addr & TARGET_PAGE_MASK;
         l = (page + TARGET_PAGE_SIZE) - addr;
@@ -3315,6 +3365,8 @@ void cpu_physical_memory_unmap(void *buffer, target_phys_addr_t len,
 /* warning: addr must be aligned */
 uint32_t ldl_phys(target_phys_addr_t addr)
 {
+   qsim_memop_phys(addr, 4, 0);
+
     int io_index;
     uint8_t *ptr;
     uint32_t val;
@@ -3347,6 +3399,8 @@ uint32_t ldl_phys(target_phys_addr_t addr)
 /* warning: addr must be aligned */
 uint64_t ldq_phys(target_phys_addr_t addr)
 {
+    qsim_memop_phys(addr, 8, 0);
+
     int io_index;
     uint8_t *ptr;
     uint64_t val;
@@ -3386,6 +3440,7 @@ uint64_t ldq_phys(target_phys_addr_t addr)
 uint32_t ldub_phys(target_phys_addr_t addr)
 {
     uint8_t val;
+    qsim_memop_phys(addr, 1, 0);
     cpu_physical_memory_read(addr, &val, 1);
     return val;
 }
@@ -3394,6 +3449,7 @@ uint32_t ldub_phys(target_phys_addr_t addr)
 uint32_t lduw_phys(target_phys_addr_t addr)
 {
     uint16_t val;
+    qsim_memop_phys(addr, 2, 0);
     cpu_physical_memory_read(addr, (uint8_t *)&val, 2);
     return tswap16(val);
 }
@@ -3435,6 +3491,8 @@ void stl_phys_notdirty(target_phys_addr_t addr, uint32_t val)
             }
         }
     }
+
+    qsim_memop_phys(addr, 4, 1);
 }
 
 void stq_phys_notdirty(target_phys_addr_t addr, uint64_t val)
@@ -3467,6 +3525,8 @@ void stq_phys_notdirty(target_phys_addr_t addr, uint64_t val)
             (addr & ~TARGET_PAGE_MASK);
         stq_p(ptr, val);
     }
+
+    qsim_memop_phys(addr, 8, 1);
 }
 
 /* warning: addr must be aligned */
@@ -3503,6 +3563,8 @@ void stl_phys(target_phys_addr_t addr, uint32_t val)
                 (0xff & ~CODE_DIRTY_FLAG);
         }
     }
+
+    qsim_memop_phys(addr, 4, 1);
 }
 
 /* XXX: optimize */
@@ -3510,6 +3572,7 @@ void stb_phys(target_phys_addr_t addr, uint32_t val)
 {
     uint8_t v = val;
     cpu_physical_memory_write(addr, &v, 1);
+    qsim_memop_phys(addr, 1, 1);
 }
 
 /* XXX: optimize */
@@ -3517,6 +3580,7 @@ void stw_phys(target_phys_addr_t addr, uint32_t val)
 {
     uint16_t v = tswap16(val);
     cpu_physical_memory_write(addr, (const uint8_t *)&v, 2);
+    qsim_memop_phys(addr, 2, 1);
 }
 
 /* XXX: optimize */
@@ -3524,6 +3588,7 @@ void stq_phys(target_phys_addr_t addr, uint64_t val)
 {
     val = tswap64(val);
     cpu_physical_memory_write(addr, (const uint8_t *)&val, 8);
+    qsim_memop_phys(addr, 8, 1);
 }
 
 #endif

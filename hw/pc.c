@@ -46,6 +46,11 @@
 #include "loader.h"
 #include "elf.h"
 
+#include "qsim-vm.h"
+extern int               qsim_qemu_is_slave;
+extern qemu_ramdesc_t   *qsim_ram;
+extern qsim_lockstruct  *qsim_ram_l;
+
 /* output Bochs bios info messages */
 //#define DEBUG_BIOS
 
@@ -66,8 +71,8 @@
 #define MAX_IDE_BUS 2
 
 static fdctrl_t *floppy_controller;
-static RTCState *rtc_state;
-static PITState *pit;
+//static RTCState *rtc_state;
+//static PITState *pit;
 static PCII440FXState *i440fx_state;
 
 typedef struct isa_irq_state {
@@ -158,239 +163,6 @@ static void pic_irq_request(void *opaque, int irq, int level)
 /* PC cmos mappings */
 
 #define REG_EQUIPMENT_BYTE          0x14
-
-static int cmos_get_fd_drive_type(int fd0)
-{
-    int val;
-
-    switch (fd0) {
-    case 0:
-        /* 1.44 Mb 3"5 drive */
-        val = 4;
-        break;
-    case 1:
-        /* 2.88 Mb 3"5 drive */
-        val = 5;
-        break;
-    case 2:
-        /* 1.2 Mb 5"5 drive */
-        val = 2;
-        break;
-    default:
-        val = 0;
-        break;
-    }
-    return val;
-}
-
-static void cmos_init_hd(int type_ofs, int info_ofs, BlockDriverState *hd)
-{
-    RTCState *s = rtc_state;
-    int cylinders, heads, sectors;
-    bdrv_get_geometry_hint(hd, &cylinders, &heads, &sectors);
-    rtc_set_memory(s, type_ofs, 47);
-    rtc_set_memory(s, info_ofs, cylinders);
-    rtc_set_memory(s, info_ofs + 1, cylinders >> 8);
-    rtc_set_memory(s, info_ofs + 2, heads);
-    rtc_set_memory(s, info_ofs + 3, 0xff);
-    rtc_set_memory(s, info_ofs + 4, 0xff);
-    rtc_set_memory(s, info_ofs + 5, 0xc0 | ((heads > 8) << 3));
-    rtc_set_memory(s, info_ofs + 6, cylinders);
-    rtc_set_memory(s, info_ofs + 7, cylinders >> 8);
-    rtc_set_memory(s, info_ofs + 8, sectors);
-}
-
-/* convert boot_device letter to something recognizable by the bios */
-static int boot_device2nibble(char boot_device)
-{
-    switch(boot_device) {
-    case 'a':
-    case 'b':
-        return 0x01; /* floppy boot */
-    case 'c':
-        return 0x02; /* hard drive boot */
-    case 'd':
-        return 0x03; /* CD-ROM boot */
-    case 'n':
-        return 0x04; /* Network boot */
-    }
-    return 0;
-}
-
-/* copy/pasted from cmos_init, should be made a general function
- and used there as well */
-static int pc_boot_set(void *opaque, const char *boot_device)
-{
-    Monitor *mon = cur_mon;
-#define PC_MAX_BOOT_DEVICES 3
-    RTCState *s = (RTCState *)opaque;
-    int nbds, bds[3] = { 0, };
-    int i;
-
-    nbds = strlen(boot_device);
-    if (nbds > PC_MAX_BOOT_DEVICES) {
-        monitor_printf(mon, "Too many boot devices for PC\n");
-        return(1);
-    }
-    for (i = 0; i < nbds; i++) {
-        bds[i] = boot_device2nibble(boot_device[i]);
-        if (bds[i] == 0) {
-            monitor_printf(mon, "Invalid boot device for PC: '%c'\n",
-                           boot_device[i]);
-            return(1);
-        }
-    }
-    rtc_set_memory(s, 0x3d, (bds[1] << 4) | bds[0]);
-    rtc_set_memory(s, 0x38, (bds[2] << 4));
-    return(0);
-}
-
-typedef struct pc_cmos_init_late_arg {
-    BusState *idebus0, *idebus1;
-} pc_cmos_init_late_arg;
-
-static void pc_cmos_init_late(void *opaque)
-{
-    pc_cmos_init_late_arg *arg = opaque;
-    RTCState *s = rtc_state;
-    int val;
-    BlockDriverState *hd_table[4];
-    int i;
-
-    ide_get_bs(hd_table, arg->idebus0);
-    ide_get_bs(hd_table + 2, arg->idebus1);
-
-    rtc_set_memory(s, 0x12, (hd_table[0] ? 0xf0 : 0) | (hd_table[1] ? 0x0f : 0));
-    if (hd_table[0])
-        cmos_init_hd(0x19, 0x1b, hd_table[0]);
-    if (hd_table[1])
-        cmos_init_hd(0x1a, 0x24, hd_table[1]);
-
-    val = 0;
-    for (i = 0; i < 4; i++) {
-        if (hd_table[i]) {
-            int cylinders, heads, sectors, translation;
-            /* NOTE: bdrv_get_geometry_hint() returns the physical
-                geometry.  It is always such that: 1 <= sects <= 63, 1
-                <= heads <= 16, 1 <= cylinders <= 16383. The BIOS
-                geometry can be different if a translation is done. */
-            translation = bdrv_get_translation_hint(hd_table[i]);
-            if (translation == BIOS_ATA_TRANSLATION_AUTO) {
-                bdrv_get_geometry_hint(hd_table[i], &cylinders, &heads, &sectors);
-                if (cylinders <= 1024 && heads <= 16 && sectors <= 63) {
-                    /* No translation. */
-                    translation = 0;
-                } else {
-                    /* LBA translation. */
-                    translation = 1;
-                }
-            } else {
-                translation--;
-            }
-            val |= translation << (i * 2);
-        }
-    }
-    rtc_set_memory(s, 0x39, val);
-
-    qemu_unregister_reset(pc_cmos_init_late, opaque);
-}
-
-static void cmos_init(ram_addr_t ram_size, ram_addr_t above_4g_mem_size,
-                      const char *boot_device,
-                      BusState *idebus0, BusState *idebus1)
-{
-    RTCState *s = rtc_state;
-    int nbds, bds[3] = { 0, };
-    int val;
-    int fd0, fd1, nb;
-    int i;
-    static pc_cmos_init_late_arg arg;
-
-    /* various important CMOS locations needed by PC/Bochs bios */
-
-    /* memory size */
-    val = 640; /* base memory in K */
-    rtc_set_memory(s, 0x15, val);
-    rtc_set_memory(s, 0x16, val >> 8);
-
-    val = (ram_size / 1024) - 1024;
-    if (val > 65535)
-        val = 65535;
-    rtc_set_memory(s, 0x17, val);
-    rtc_set_memory(s, 0x18, val >> 8);
-    rtc_set_memory(s, 0x30, val);
-    rtc_set_memory(s, 0x31, val >> 8);
-
-    if (above_4g_mem_size) {
-        rtc_set_memory(s, 0x5b, (unsigned int)above_4g_mem_size >> 16);
-        rtc_set_memory(s, 0x5c, (unsigned int)above_4g_mem_size >> 24);
-        rtc_set_memory(s, 0x5d, (uint64_t)above_4g_mem_size >> 32);
-    }
-
-    if (ram_size > (16 * 1024 * 1024))
-        val = (ram_size / 65536) - ((16 * 1024 * 1024) / 65536);
-    else
-        val = 0;
-    if (val > 65535)
-        val = 65535;
-    rtc_set_memory(s, 0x34, val);
-    rtc_set_memory(s, 0x35, val >> 8);
-
-    /* set the number of CPU */
-    rtc_set_memory(s, 0x5f, smp_cpus - 1);
-
-    /* set boot devices, and disable floppy signature check if requested */
-#define PC_MAX_BOOT_DEVICES 3
-    nbds = strlen(boot_device);
-    if (nbds > PC_MAX_BOOT_DEVICES) {
-        fprintf(stderr, "Too many boot devices for PC\n");
-        exit(1);
-    }
-    for (i = 0; i < nbds; i++) {
-        bds[i] = boot_device2nibble(boot_device[i]);
-        if (bds[i] == 0) {
-            fprintf(stderr, "Invalid boot device for PC: '%c'\n",
-                    boot_device[i]);
-            exit(1);
-        }
-    }
-    rtc_set_memory(s, 0x3d, (bds[1] << 4) | bds[0]);
-    rtc_set_memory(s, 0x38, (bds[2] << 4) | (fd_bootchk ?  0x0 : 0x1));
-
-    /* floppy type */
-
-    fd0 = fdctrl_get_drive_type(floppy_controller, 0);
-    fd1 = fdctrl_get_drive_type(floppy_controller, 1);
-
-    val = (cmos_get_fd_drive_type(fd0) << 4) | cmos_get_fd_drive_type(fd1);
-    rtc_set_memory(s, 0x10, val);
-
-    val = 0;
-    nb = 0;
-    if (fd0 < 3)
-        nb++;
-    if (fd1 < 3)
-        nb++;
-    switch (nb) {
-    case 0:
-        break;
-    case 1:
-        val |= 0x01; /* 1 drive, ready for boot */
-        break;
-    case 2:
-        val |= 0x41; /* 2 drives, ready for boot */
-        break;
-    }
-    val |= 0x02; /* FPU is there */
-    val |= 0x04; /* PS/2 mouse installed */
-    rtc_set_memory(s, REG_EQUIPMENT_BYTE, val);
-
-    /* hard drives */
-
-    arg.idebus0 = idebus0;
-    arg.idebus1 = idebus1;
-    qemu_register_reset(pc_cmos_init_late, &arg);
-}
 
 void ioport_set_a20(int enable)
 {
@@ -1007,10 +779,9 @@ static void pc_init1(ram_addr_t ram_size,
     char *filename;
     int ret, linux_boot, i;
     ram_addr_t ram_addr, bios_offset, option_rom_offset;
-    ram_addr_t below_4g_mem_size, above_4g_mem_size = 0;
     int bios_size, isa_bios_size;
     PCIBus *pci_bus;
-    ISADevice *isa_dev;
+  //ISADevice *isa_dev;
     int piix3_devfn = -1;
     CPUState *env;
     qemu_irq *cpu_irq;
@@ -1022,12 +793,7 @@ static void pc_init1(ram_addr_t ram_size,
     DriveInfo *fd[MAX_FD];
     void *fw_cfg;
 
-    if (ram_size >= 0xe0000000 ) {
-        above_4g_mem_size = ram_size - 0xe0000000;
-        below_4g_mem_size = 0xe0000000;
-    } else {
-        below_4g_mem_size = ram_size;
-    }
+    pci_enabled = 0;
 
     linux_boot = (kernel_filename != NULL);
 
@@ -1046,84 +812,28 @@ static void pc_init1(ram_addr_t ram_size,
 
     vmport_init();
 
-    /* allocate RAM */
-    ram_addr = qemu_ram_alloc(0xa0000);
-    cpu_register_physical_memory(0, 0xa0000, ram_addr);
-
-    /* Allocate, even though we won't register, so we don't break the
-     * phys_ram_base + PA assumption. This range includes vga (0xa0000 - 0xc0000),
-     * and some bios areas, which will be registered later
+    /* If there is no external QSIM RAM, allocate RAM and the 
+     * qemu_ramdesc_t struct. 
      */
-    ram_addr = qemu_ram_alloc(0x100000 - 0xa0000);
-    ram_addr = qemu_ram_alloc(below_4g_mem_size - 0x100000);
-    cpu_register_physical_memory(0x100000,
-                 below_4g_mem_size - 0x100000,
-                 ram_addr);
+    if (qsim_ram == NULL) {
+      /* allocate the qsim_ram structure */
+      qsim_ram = qemu_mallocz(sizeof(qemu_ramdesc_t));
+      qsim_ram->l = qemu_mallocz(sizeof(qsim_lockstruct));
 
-    /* above 4giga memory allocation */
-    if (above_4g_mem_size > 0) {
-#if TARGET_PHYS_ADDR_BITS == 32
-        hw_error("To much RAM for 32-bit physical address");
-#else
-        ram_addr = qemu_ram_alloc(above_4g_mem_size);
-        cpu_register_physical_memory(0x100000000ULL,
-                                     above_4g_mem_size,
-                                     ram_addr);
-#endif
-    }
+      /* initialize the sync. */
+      qsim_lock_init(qsim_ram->l);
 
-
-    /* BIOS load */
-    if (bios_name == NULL)
-        bios_name = BIOS_FILENAME;
-    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
-    if (filename) {
-        bios_size = get_image_size(filename);
+      /* allocate RAM */
+      ram_addr = qemu_ram_alloc(ram_size);
+      cpu_register_physical_memory(0, ram_size, ram_addr);
+      qsim_ram->sz = ram_size;
+      qsim_ram->mem_ptr = qemu_get_ram_ptr(ram_addr);
     } else {
-        bios_size = -1;
-    }
-    if (bios_size <= 0 ||
-        (bios_size % 65536) != 0) {
-        goto bios_error;
-    }
-    bios_offset = qemu_ram_alloc(bios_size);
-    ret = rom_add_file_fixed(bios_name, (uint32_t)(-bios_size));
-    if (ret != 0) {
-    bios_error:
-        fprintf(stderr, "qemu: could not load PC BIOS '%s'\n", bios_name);
-        exit(1);
-    }
-    if (filename) {
-        qemu_free(filename);
-    }
-    /* map the last 128KB of the BIOS in ISA space */
-    isa_bios_size = bios_size;
-    if (isa_bios_size > (128 * 1024))
-        isa_bios_size = 128 * 1024;
-    cpu_register_physical_memory(0x100000 - isa_bios_size,
-                                 isa_bios_size,
-                                 (bios_offset + bios_size - isa_bios_size) | IO_MEM_ROM);
-
-
-
-    rom_enable_driver_roms = 1;
-    option_rom_offset = qemu_ram_alloc(PC_ROM_SIZE);
-    cpu_register_physical_memory(PC_ROM_MIN_VGA, PC_ROM_SIZE, option_rom_offset);
-
-    /* map all the bios at the top of memory */
-    cpu_register_physical_memory((uint32_t)(-bios_size),
-                                 bios_size, bios_offset | IO_MEM_ROM);
-
-    fw_cfg = bochs_bios_init();
-    rom_set_fw(fw_cfg);
-
-    if (linux_boot) {
-        load_linux(fw_cfg, kernel_filename, initrd_filename, kernel_cmdline, below_4g_mem_size);
+      ram_addr = qemu_ram_share(qsim_ram->sz, qsim_ram->mem_ptr);
+      cpu_register_physical_memory(0, qsim_ram->sz, ram_addr);
     }
 
-    for (i = 0; i < nb_option_roms; i++) {
-        rom_add_option(option_rom[i]);
-    }
+    qsim_ram_l = qsim_ram->l;
 
     cpu_irq = qemu_allocate_irqs(pic_irq_request, NULL, 1);
     i8259 = i8259_init(cpu_irq[0]);
@@ -1146,6 +856,7 @@ static void pc_init1(ram_addr_t ram_size,
 
     register_ioport_write(0xf0, 1, 1, ioportF0_write, NULL);
 
+#if 0
     if (cirrus_vga_enabled) {
         if (pci_enabled) {
             pci_cirrus_vga_init(pci_bus);
@@ -1164,10 +875,11 @@ static void pc_init1(ram_addr_t ram_size,
             isa_vga_init();
         }
     }
+#endif
 
-    rtc_state = rtc_init(2000);
+    //rtc_state = rtc_init(2000);
 
-    qemu_register_boot_set(pc_boot_set, rtc_state);
+    //qemu_register_boot_set(pc_boot_set, rtc_state);
 
     register_ioport_read(0x92, 1, 1, ioport92_read, NULL);
     register_ioport_write(0x92, 1, 1, ioport92_write, NULL);
@@ -1175,12 +887,13 @@ static void pc_init1(ram_addr_t ram_size,
     if (pci_enabled) {
         isa_irq_state->ioapic = ioapic_init();
     }
-    pit = pit_init(0x40, isa_reserve_irq(0));
-    pcspk_init(pit);
+    //pit = pit_init(0x40, isa_reserve_irq(0));
+    //pcspk_init(pit);
     if (!no_hpet) {
         hpet_init(isa_irq);
     }
 
+#if 0
     for(i = 0; i < MAX_SERIAL_PORTS; i++) {
         if (serial_hds[i]) {
             serial_isa_init(i, serial_hds[i]);
@@ -1192,6 +905,7 @@ static void pc_init1(ram_addr_t ram_size,
             parallel_init(i, parallel_hds[i]);
         }
     }
+#endif
 
     for(i = 0; i < nb_nics; i++) {
         NICInfo *nd = &nd_table[i];
@@ -1211,6 +925,7 @@ static void pc_init1(ram_addr_t ram_size,
         hd[i] = drive_get(IF_IDE, i / MAX_IDE_DEVS, i % MAX_IDE_DEVS);
     }
 
+#if 0
     if (pci_enabled) {
         PCIDevice *dev;
         dev = pci_piix3_ide_init(pci_bus, hd, piix3_devfn + 1);
@@ -1224,9 +939,10 @@ static void pc_init1(ram_addr_t ram_size,
             idebus[i] = qdev_get_child_bus(&dev->qdev, "ide.0");
         }
     }
+#endif
 
-    isa_dev = isa_create_simple("i8042");
-    DMA_init(0);
+  //isa_dev = isa_create_simple("i8042");
+  //DMA_init(0);
 #ifdef HAS_AUDIO
     audio_init(pci_enabled ? pci_bus : NULL, isa_irq);
 #endif
@@ -1236,12 +952,14 @@ static void pc_init1(ram_addr_t ram_size,
     }
     floppy_controller = fdctrl_init_isa(fd);
 
+#if 0
     cmos_init(below_4g_mem_size, above_4g_mem_size, boot_device,
               idebus[0], idebus[1]);
 
     if (pci_enabled && usb_enabled) {
         usb_uhci_piix3_init(pci_bus, piix3_devfn + 2);
     }
+#endif
 
     if (pci_enabled && acpi_enabled) {
         uint8_t *eeprom_buf = qemu_mallocz(8 * 256); /* XXX: make this persistent */
@@ -1314,8 +1032,8 @@ static void pc_init_isa(ram_addr_t ram_size,
    BIOS will read it and start S3 resume at POST Entry */
 void cmos_set_s3_resume(void)
 {
-    if (rtc_state)
-        rtc_set_memory(rtc_state, 0xF, 0xFE);
+  //if (rtc_state)
+  //      rtc_set_memory(rtc_state, 0xF, 0xFE);
 }
 
 static QEMUMachine pc_machine = {

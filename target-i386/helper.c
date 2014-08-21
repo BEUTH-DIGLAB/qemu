@@ -1055,9 +1055,14 @@ target_phys_addr_t cpu_get_phys_page_debug(CPUState *env, target_ulong addr)
    1  = generate PF fault
    2  = soft MMU activation required for this block
 */
+extern int qsim_memop_flag;
+
 int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
                              int is_write1, int mmu_idx, int is_softmmu)
 {
+    int qsim_memop_bak = qsim_memop_flag;
+    qsim_memop_flag = 0;
+
     uint64_t ptep, pte;
     target_ulong pde_addr, pte_addr;
     int error_code, is_dirty, prot, page_size, ret, is_write, is_user;
@@ -1094,6 +1099,7 @@ int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
             if (sext != 0 && sext != -1) {
                 env->error_code = 0;
                 env->exception_index = EXCP0D_GPF;
+                qsim_memop_flag = qsim_memop_bak;
                 return 1;
             }
 
@@ -1322,6 +1328,7 @@ int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
     vaddr = virt_addr + page_offset;
 
     ret = tlb_set_page_exec(env, vaddr, paddr, prot, mmu_idx, is_softmmu);
+    qsim_memop_flag = qsim_memop_bak;
     return ret;
  do_fault_protect:
     error_code = PG_ERROR_P_MASK;
@@ -1342,6 +1349,7 @@ int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
     }
     env->error_code = error_code;
     env->exception_index = EXCP0E_PAGE;
+    qsim_memop_flag = qsim_memop_bak;
     return 1;
 }
 

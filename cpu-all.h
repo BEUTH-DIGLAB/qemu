@@ -16,8 +16,12 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #ifndef CPU_ALL_H
 #define CPU_ALL_H
+
+extern uint64_t qsim_phys_addr;
+extern uint64_t qsim_host_addr;
 
 #include "qemu-common.h"
 #include "cpu-common.h"
@@ -651,8 +655,8 @@ extern int have_guest_base;
 #else /* !CONFIG_USER_ONLY */
 /* NOTE: we use double casts if pointers and target_ulong have
    different sizes */
-#define saddr(x) (uint8_t *)(long)(x)
-#define laddr(x) (uint8_t *)(long)(x)
+#define saddr(x) (uint8_t*)(qsim_host_addr = (long)(x))
+#define laddr(x) (uint8_t*)(qsim_host_addr = (long)(x))
 #endif
 
 #define ldub_raw(p) ldub_p(laddr((p)))

@@ -86,12 +86,12 @@ typedef int64_t sbits64;
 *----------------------------------------------------------------------------*/
 #ifdef CONFIG_SOFTFLOAT
 /* bit exact soft float support */
-#define FLOATX80
-#define FLOAT128
+//#define FLOATX80
+//#define FLOAT128
 #else
 /* native float support */
 #if (defined(__i386__) || defined(__x86_64__)) && !defined(CONFIG_BSD)
-#define FLOATX80
+//#define FLOATX80
 #endif
 #endif /* !CONFIG_SOFTFLOAT */
 
