@@ -45,6 +45,7 @@ uint64_t qsim_eip;
 extern inst_cb_t    qsim_inst_cb;
 extern mem_cb_t     qsim_mem_cb;
 extern atomic_cb_t  qsim_atomic_cb;
+extern int_cb_t     qsim_int_cb;
 
 static void raise_exception(CPUARMState *env, int tt)
 {
@@ -54,6 +55,11 @@ static void raise_exception(CPUARMState *env, int tt)
     cs->exception_index = excp;
     env->exception.syndrome = syndrome;
     env->exception.target_el = target_el;
+    if (qsim_int_cb != NULL && qsim_int_cb(qsim_id, tt)) {
+        swapcontext(&qemu_context, &main_context);
+    }
+
+    cs->exception_index = tt;
     cpu_loop_exit(cs);
 }
 
