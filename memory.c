@@ -26,12 +26,6 @@
 #include "exec/ram_addr.h"
 #include "sysemu/sysemu.h"
 
-#include "qsim-vm.h"
-
-extern int 	qsim_qemu_is_slave;
-extern qemu_ramdesc_t	*qsim_ram;
-extern qsim_lockstruct  *qsim_ram_l;
-
 //#define DEBUG_UNASSIGNED
 
 #define RAM_ADDR_INVALID (~(ram_addr_t)0)
