@@ -25,6 +25,7 @@
 /* Needed early for CONFIG_BSD etc. */
 #include "qemu/osdep.h"
 #include "qemu-common.h"
+#include "qemu/config-file.h"
 #include "cpu.h"
 #include "monitor/monitor.h"
 #include "qapi/qmp/qerror.h"
@@ -148,6 +149,33 @@ typedef struct TimersState {
 } TimersState;
 
 static TimersState timers_state;
+static bool mttcg_enabled;
+
+static bool default_mttcg_enabled(void)
+{
+    /*
+     * TODO: Check if we have a chance to have MTTCG working on this guest/host.
+     *       Basically is the atomic instruction implemented? Is there any
+     *       memory ordering issue?
+     */
+    return false;
+}
+
+void qemu_tcg_configure(QemuOpts *opts)
+{
+    const char *t = qemu_opt_get(opts, "thread");
+    if (t) {
+        mttcg_enabled = (strcmp(t, "multi") == 0);
+    } else {
+        mttcg_enabled = default_mttcg_enabled();
+    }
+}
+
+bool qemu_tcg_mttcg_enabled(void)
+{
+    return mttcg_enabled;
+}
+
 
 int64_t cpu_get_icount_raw(void)
 {
