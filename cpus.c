@@ -1208,9 +1208,29 @@ static int tcg_cpu_exec(CPUState *cpu)
     return ret;
 }
 
+/* Single-threaded TCG
+ *
+ * In the single-threaded case each vCPU is simulated in turn. If
+ * there is more than a single vCPU we create a simple timer to kick
+ * the vCPU and ensure we don't get stuck in a tight loop in one vCPU.
+ * This is done explicitly rather than relying on side-effects
+ * elsewhere.
+ */
+static void qemu_cpu_kick_no_halt(void);
+#define TCG_KICK_FREQ (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + \
+                       NANOSECONDS_PER_SECOND / 10)
+
+static void kick_tcg_thread(void *opaque)
+{
+    QEMUTimer *self = *(QEMUTimer **) opaque;
+    timer_mod(self, TCG_KICK_FREQ);
+    qemu_cpu_kick_no_halt();
+}
+
 static void *qemu_tcg_cpu_thread_fn(void *arg)
 {
     CPUState *cpu = arg;
+    QEMUTimer *kick_timer;
 
     rcu_register_thread();
 
@@ -1232,6 +1252,12 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
         CPU_FOREACH(cpu) {
             qemu_wait_io_event_common(cpu);
         }
+    }
+
+    /* Set to kick if we have to do more than one vCPU */
+    if (CPU_NEXT(first_cpu)) {
+        kick_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,  kick_tcg_thread, &kick_timer);
+        timer_mod(kick_timer, TCG_KICK_FREQ);
     }
 
     /* process any pending work */
