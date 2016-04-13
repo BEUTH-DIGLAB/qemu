@@ -171,6 +171,7 @@ QTestState *qtest_init(const char *extra_args)
 
     s->qemu_pid = fork();
     if (s->qemu_pid == 0) {
+        bool qtest_log = getenv("QTEST_LOG");
         setenv("QEMU_AUDIO_DRV", "none", true);
         command = g_strdup_printf("exec %s "
                                   "-qtest unix:%s,nowait "
@@ -179,9 +180,12 @@ QTestState *qtest_init(const char *extra_args)
                                   "-machine accel=qtest "
                                   "-display none "
                                   "%s", qemu_binary, socket_path,
-                                  getenv("QTEST_LOG") ? "/dev/fd/2" : "/dev/null",
+                                  qtest_log ? "/dev/fd/2" : "/dev/null",
                                   qmp_socket_path,
                                   extra_args ?: "");
+        if (qtest_log) {
+            fprintf(stderr, "%s\n", command);
+        }
         execlp("/bin/sh", "sh", "-c", command, NULL);
         exit(1);
     }
