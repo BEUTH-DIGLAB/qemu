@@ -298,41 +298,38 @@ static TranslationBlock *tb_find_slow(CPUState *cpu,
      * Pairs with smp_wmb() in tb_phys_invalidate(). */
     smp_rmb();
     tb = tb_find_physical(cpu, pc, cs_base, flags);
-    if (tb) {
-        goto found;
-    }
+    if (!tb) {
 
-    /* mmap_lock is needed by tb_gen_code, and mmap_lock must be
-     * taken outside tb_lock.  Since we're momentarily dropping
-     * tb_lock, there's a chance that our desired tb has been
-     * translated.
-     */
-    tb_unlock();
-    mmap_lock();
-    tb_lock();
-    tb = tb_find_physical(cpu, pc, cs_base, flags);
-    if (tb) {
+        /* mmap_lock is needed by tb_gen_code, and mmap_lock must be
+         * taken outside tb_lock.
+         */
+        mmap_lock();
+        tb_lock();
+
+        /* There's a chance that our desired tb has been translated while
+         * taking the locks so we check again inside the lock.
+         */
+        tb = tb_find_physical(cpu, pc, cs_base, flags);
+        if (!tb) {
+            /* if no translated code available, then translate it now */
+            tb = tb_gen_code(cpu, pc, cs_base, flags, 0);
+        }
+
+        tb_unlock();
         mmap_unlock();
-        goto found;
     }
 
-    /* if no translated code available, then translate it now */
-    tb = tb_gen_code(cpu, pc, cs_base, flags, 0);
-
-    mmap_unlock();
-
-found:
-    /* we add the TB in the virtual pc hash table */
+    /* We add the TB in the virtual pc hash table for the fast lookup */
     cpu->tb_jmp_cache[tb_jmp_cache_hash_func(pc)] = tb;
     return tb;
 }
 
 static inline TranslationBlock *tb_find_fast(CPUState *cpu,
-                                             TranslationBlock **last_tb,
+                                             TranslationBlock **ltbp,
                                              int tb_exit)
 {
     CPUArchState *env = (CPUArchState *)cpu->env_ptr;
-    TranslationBlock *tb;
+    TranslationBlock *tb, *last_tb;
     target_ulong cs_base, pc;
     uint32_t flags;
 
@@ -340,7 +337,6 @@ static inline TranslationBlock *tb_find_fast(CPUState *cpu,
        always be the same before a given translated block
        is executed. */
     cpu_get_tb_cpu_state(env, &pc, &cs_base, &flags);
-    tb_lock();
     tb = atomic_read(&cpu->tb_jmp_cache[tb_jmp_cache_hash_func(pc)]);
     if (unlikely(!tb || tb->pc != pc || tb->cs_base != cs_base ||
                  tb->flags != flags)) {
@@ -350,7 +346,7 @@ static inline TranslationBlock *tb_find_fast(CPUState *cpu,
         /* Ensure that no TB jump will be modified as the
          * translation buffer has been flushed.
          */
-        *last_tb = NULL;
+        *ltbp = NULL;
         cpu->tb_flushed = false;
     }
 #ifndef CONFIG_USER_ONLY
@@ -359,14 +355,19 @@ static inline TranslationBlock *tb_find_fast(CPUState *cpu,
      * spanning two pages because the mapping for the second page can change.
      */
     if (tb->page_addr[1] != -1) {
-        *last_tb = NULL;
+        *ltbp = NULL;
     }
 #endif
+
     /* See if we can patch the calling TB. */
-    if (*last_tb && !qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN)) {
-        tb_add_jump(*last_tb, tb_exit, tb);
+    last_tb = *ltbp;
+    if (!qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN) &&
+        last_tb &&
+        !last_tb->jmp_list_next[tb_exit]) {
+        tb_lock();
+        tb_add_jump(last_tb, tb_exit, tb);
+        tb_unlock();
     }
-    tb_unlock();
     return tb;
 }
 
