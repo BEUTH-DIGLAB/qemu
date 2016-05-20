@@ -25,6 +25,7 @@
 #include "qemu/cutils.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
+#include "qom/cpu.h"
 #include "tcg.h"
 #include "hw/qdev-core.h"
 #if !defined(CONFIG_USER_ONLY)
@@ -63,6 +64,44 @@
 #endif
 
 //#define DEBUG_SUBPAGE
+//#define DEBUG_DEBUG
+
+#ifdef DEBUG_DEBUG
+#define CHECK_DEBUG_SAFE 1
+#else
+#define CHECK_DEBUG_SAFE 0
+#endif
+
+/*
+ * Safe access to debugging structures.
+ *
+ * Breakpoints and Watchpoints are kept in the vCPU structures. There
+ * are two ways they are manipulated:
+ *
+ *   - Outside of the context of the vCPU thread (e.g. gdbstub)
+ *   - Inside the context of the vCPU (architectural debug registers)
+ *
+ * In system emulation mode the chance of corruption is usually
+ * mitigated by the fact the vCPUs is usually suspended whenever these
+ * changes are made.
+ *
+ * In user emulation mode it is less clear (XXX: work this out)
+ */
+
+#ifdef CONFIG_SOFTMMU
+#define assert_debug_safe(cpu) do {                                     \
+        if (CHECK_DEBUG_SAFE) {                                         \
+            g_assert(!cpu->created || (cpu_is_stopped(cpu) || cpu == current_cpu)); \
+        }                                                               \
+    } while (0)
+#else
+#define assert_debug_safe(cpu) do {                                     \
+        if (CHECK_DEBUG_SAFE) {                                         \
+            g_assert(false);                                            \
+        }                                                               \
+    } while (0)
+#endif
+
 
 #if !defined(CONFIG_USER_ONLY)
 /* ram_list is read under rcu_read_lock()/rcu_read_unlock().  Writes
@@ -737,6 +776,8 @@ int cpu_watchpoint_insert(CPUState *cpu, vaddr addr, vaddr len,
 {
     CPUWatchpoint *wp;
 
+    assert_debug_safe(cpu);
+
     /* forbid ranges which are empty or run off the end of the address space */
     if (len == 0 || (addr + len - 1) < addr) {
         error_report("tried to set invalid watchpoint at %"
@@ -769,6 +810,8 @@ int cpu_watchpoint_remove(CPUState *cpu, vaddr addr, vaddr len,
 {
     CPUWatchpoint *wp;
 
+    assert_debug_safe(cpu);
+
     QTAILQ_FOREACH(wp, &cpu->watchpoints, entry) {
         if (addr == wp->vaddr && len == wp->len
                 && flags == (wp->flags & ~BP_WATCHPOINT_HIT)) {
@@ -782,6 +825,8 @@ int cpu_watchpoint_remove(CPUState *cpu, vaddr addr, vaddr len,
 /* Remove a specific watchpoint by reference.  */
 void cpu_watchpoint_remove_by_ref(CPUState *cpu, CPUWatchpoint *watchpoint)
 {
+    assert_debug_safe(cpu);
+
     QTAILQ_REMOVE(&cpu->watchpoints, watchpoint, entry);
 
     tlb_flush_page(cpu, watchpoint->vaddr);
@@ -793,6 +838,8 @@ void cpu_watchpoint_remove_by_ref(CPUState *cpu, CPUWatchpoint *watchpoint)
 void cpu_watchpoint_remove_all(CPUState *cpu, int mask)
 {
     CPUWatchpoint *wp, *next;
+
+    assert_debug_safe(cpu);
 
     QTAILQ_FOREACH_SAFE(wp, &cpu->watchpoints, entry, next) {
         if (wp->flags & mask) {
@@ -829,6 +876,8 @@ int cpu_breakpoint_insert(CPUState *cpu, vaddr pc, int flags,
 {
     CPUBreakpoint *bp;
 
+    assert_debug_safe(cpu);
+
     bp = g_malloc(sizeof(*bp));
 
     bp->pc = pc;
@@ -849,10 +898,15 @@ int cpu_breakpoint_insert(CPUState *cpu, vaddr pc, int flags,
     return 0;
 }
 
-/* Remove a specific breakpoint.  */
+/* Remove a specific breakpoint.
+ *
+ * See cpu_breakpoint_insert notes for information about locking.
+ */
 int cpu_breakpoint_remove(CPUState *cpu, vaddr pc, int flags)
 {
     CPUBreakpoint *bp;
+
+    assert_debug_safe(cpu);
 
     QTAILQ_FOREACH(bp, &cpu->breakpoints, entry) {
         if (bp->pc == pc && bp->flags == flags) {
