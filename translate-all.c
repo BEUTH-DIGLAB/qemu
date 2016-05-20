@@ -59,7 +59,7 @@
 #include "exec/log.h"
 
 //#define DEBUG_TB_INVALIDATE
-//#define DEBUG_FLUSH
+//#define DEBUG_TB_FLUSH
 /* make various TB consistency checks */
 //#define DEBUG_TB_CHECK
 
@@ -836,7 +836,7 @@ static void page_flush_tb(void)
 /* XXX: tb_flush is currently not thread safe */
 void tb_flush(CPUState *cpu)
 {
-#if defined(DEBUG_FLUSH)
+#if defined(DEBUG_TB_FLUSH)
     printf("qemu: flush code_size=%ld nb_tbs=%d avg_tb_size=%ld\n",
            (unsigned long)(tcg_ctx.code_gen_ptr - tcg_ctx.code_gen_buffer),
            tcg_ctx.tb_ctx.nb_tbs, tcg_ctx.tb_ctx.nb_tbs > 0 ?
