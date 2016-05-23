@@ -452,6 +452,8 @@ static PageDesc *page_find_alloc(tb_page_addr_t index, int alloc)
     void **lp;
     int i;
 
+    assert_memory_lock();
+
     /* Level 1.  Always allocated.  */
     lp = l1_map + ((index >> V_L1_SHIFT) & (V_L1_SIZE - 1));
 
@@ -818,6 +820,8 @@ static TranslationBlock *tb_alloc(target_ulong pc)
 {
     TranslationBlock *tb;
 
+    assert_tb_lock();
+
     if (tcg_ctx.tb_ctx.nb_tbs >= tcg_ctx.code_gen_max_blocks) {
         return NULL;
     }
@@ -830,6 +834,8 @@ static TranslationBlock *tb_alloc(target_ulong pc)
 /* Called with tb_lock held.  */
 void tb_free(TranslationBlock *tb)
 {
+    assert_tb_lock();
+
     /* In practice this is mostly used for single use temporary TB
        Ignore the hard cases and just back up if this TB happens to
        be the last one generated.  */
@@ -1211,6 +1217,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
 #ifdef CONFIG_PROFILER
     int64_t ti;
 #endif
+    assert_memory_lock();
 
     phys_pc = get_page_addr_code(env, pc);
     if (use_icount && !(cflags & CF_IGNORE_ICOUNT)) {
@@ -1338,6 +1345,8 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
  */
 void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
 {
+    assert_memory_lock();
+
     while (start < end) {
         tb_invalidate_phys_page_range(start, end, 0);
         start &= TARGET_PAGE_MASK;
@@ -1373,6 +1382,8 @@ void tb_invalidate_phys_page_range(tb_page_addr_t start, tb_page_addr_t end,
     target_ulong current_cs_base = 0;
     uint32_t current_flags = 0;
 #endif /* TARGET_HAS_PRECISE_SMC */
+
+    assert_memory_lock();
 
     p = page_find(start >> TARGET_PAGE_BITS);
     if (!p) {
