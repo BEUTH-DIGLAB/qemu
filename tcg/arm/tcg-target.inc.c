@@ -1633,6 +1633,11 @@ static void tcg_out_qemu_st(TCGContext *s, const TCGArg *args, bool is64)
 #endif
 }
 
+static inline void tcg_out_fence(TCGContext *s)
+{
+    tcg_out32(s, 0xD5033BBF);
+}
+
 static tcg_insn_unit *tb_ret_addr;
 
 static inline void tcg_out_op(TCGContext *s, TCGOpcode opc,
@@ -1905,6 +1910,10 @@ static inline void tcg_out_op(TCGContext *s, TCGOpcode opc,
         tcg_out_udiv(s, COND_AL, args[0], args[1], args[2]);
         break;
 
+    case INDEX_op_fence:
+        tcg_out_fence(s);
+        break;
+
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_movi_i32: /* Always emitted via tcg_out_movi.  */
     case INDEX_op_call:     /* Always emitted via tcg_out_call.  */
@@ -2038,6 +2047,10 @@ static inline void tcg_out_movi(TCGContext *s, TCGType type,
                                 TCGReg ret, tcg_target_long arg)
 {
     tcg_out_movi32(s, COND_AL, ret, arg);
+}
+
+static inline void tcg_out_fence(TCGContext *s)
+{
 }
 
 /* Compute frame size via macros, to share between tcg_target_qemu_prologue

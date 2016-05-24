@@ -1246,8 +1246,12 @@ static void handle_sync(DisasContext *s, uint32_t insn,
         gen_clrex(s, insn);
         return;
     case 4: /* DSB */
+        /* We don't emulate caches so instruction barriers are no-ops */
+	return;
     case 5: /* DMB */
-        /* We don't emulate caches so barriers are no-ops */
+        if (TCG_TARGET_HAS_fence) {
+            tcg_gen_fence();
+        }
         return;
     case 6: /* ISB */
         /* We need to break the TB after this insn to execute
