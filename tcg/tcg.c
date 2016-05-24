@@ -2443,8 +2443,6 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb)
             tcg_reg_alloc_call(s, op->callo, op->calli, args,
                                dead_args, sync_args);
             break;
-        case INDEX_op_fence:
-            break;
         default:
             /* Sanity check that we've not introduced any unhandled opcodes. */
             if (def->flags & TCG_OPF_NOT_PRESENT) {
