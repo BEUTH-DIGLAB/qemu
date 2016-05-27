@@ -143,6 +143,12 @@ void tcg_gen_op6(TCGContext *ctx, TCGOpcode opc, TCGArg a1, TCGArg a2,
     tcg_emit_op(ctx, opc, pi);
 }
 
+void tcg_gen_mb(TCGArg a)
+{
+    /* ??? Enable only when MTTCG is enabled.  */
+    tcg_gen_op1(&tcg_ctx, INDEX_op_mb, 0);
+}
+
 /* 32 bit ops */
 
 void tcg_gen_addi_i32(TCGv_i32 ret, TCGv_i32 arg1, int32_t arg2)
