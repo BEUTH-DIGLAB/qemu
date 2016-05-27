@@ -249,6 +249,8 @@ static const int tcg_target_call_oarg_regs[] = {
 #define STWA       (INSN_OP(3) | INSN_OP3(0x14))
 #define STXA       (INSN_OP(3) | INSN_OP3(0x1e))
 
+#define MEMBAR     (INSN_OP(2) | INSN_OP3(0x28) | INSN_RS1(15) | (1 << 13))
+
 #ifndef ASI_PRIMARY_LITTLE
 #define ASI_PRIMARY_LITTLE 0x88
 #endif
@@ -1450,6 +1452,11 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc,
 	tcg_out_arithc(s, a0, TCG_REG_G0, a1, const_args[1], c);
 	break;
 
+    case INDEX_op_mb:
+        /* membar #LoadLoad|#LoadStore|#StoreStore|#StoreLoad */
+        tcg_out32(s, MEMBAR | 15);
+        break;
+
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
     case INDEX_op_movi_i32: /* Always emitted via tcg_out_movi.  */
@@ -1551,6 +1558,7 @@ static const TCGTargetOpDef sparc_op_defs[] = {
     { INDEX_op_qemu_st_i32, { "sZ", "A" } },
     { INDEX_op_qemu_st_i64, { "SZ", "A" } },
 
+    { INDEX_op_mb, { "r" } },
     { -1 },
 };
 
