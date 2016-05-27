@@ -255,6 +255,7 @@ static const TCGTargetOpDef tcg_target_op_defs[] = {
     { INDEX_op_bswap32_i32, { R, R } },
 #endif
 
+    { INDEX_op_mb, { "r" } },
     { -1 },
 };
 
@@ -797,6 +798,8 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
             tcg_out_r(s, *args++);
         }
         tcg_out_i(s, *args++);
+        break;
+    case INDEX_op_mb:
         break;
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
