@@ -408,6 +408,14 @@ static inline intptr_t QEMU_ARTIFICIAL GET_TCGV_PTR(TCGv_ptr t)
 #define TCG_CALL_DUMMY_TCGV     MAKE_TCGV_I32(-1)
 #define TCG_CALL_DUMMY_ARG      ((TCGArg)(-1))
 
+/* TCGOpmb args */
+#define TCG_MB_FULL             ((TCGArg)(0))
+#define TCG_MB_READ             ((TCGArg)(1))
+#define TCG_MB_WRITE            ((TCGArg)(2))
+#define TCG_MB_ACQUIRE          ((TCGArg)(3))
+#define TCG_MB_RELEASE          ((TCGArg)(4))
+
+
 /* Conditions.  Note that these are laid out for easy manipulation by
    the functions below:
      bit 0 is used for inverting;
