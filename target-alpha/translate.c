@@ -2334,11 +2334,12 @@ static ExitStatus translate_one(DisasContext *ctx, uint32_t insn)
             break;
         case 0x4000:
             /* MB */
-            /* No-op */
+            tcg_gen_mb(TCG_MB_FULL);
             break;
         case 0x4400:
             /* WMB */
-            /* No-op */
+            /* TODO: Change this to write barrier */
+            tcg_gen_mb(TCG_MB_FULL);
             break;
         case 0x8000:
             /* FETCH */
