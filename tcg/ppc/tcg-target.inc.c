@@ -469,6 +469,9 @@ static int tcg_target_const_match(tcg_target_long val, TCGType type,
 #define STHX   XO31(407)
 #define STWX   XO31(151)
 
+#define HWSYNC XO31(598)
+#define LWSYNC (HWSYNC | (1u << 21))
+
 #define SPR(a, b) ((((a)<<5)|(b))<<11)
 #define LR     SPR(8, 0)
 #define CTR    SPR(9, 0)
@@ -2439,6 +2442,10 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
         tcg_out32(s, MULHD | TAB(args[0], args[1], args[2]));
         break;
 
+    case INDEX_op_mb:
+        /* ??? Do we want SEQ_CST or ACQ_REL memory model.  */
+        tcg_out32(s, HWSYNC);
+        break;
     case INDEX_op_mov_i32:   /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
     case INDEX_op_movi_i32:  /* Always emitted via tcg_out_movi.  */
@@ -2586,6 +2593,7 @@ static const TCGTargetOpDef ppc_op_defs[] = {
     { INDEX_op_qemu_st_i64, { "S", "S", "S", "S" } },
 #endif
 
+    { INDEX_op_mb, { "r" } },
     { -1 },
 };
 
