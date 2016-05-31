@@ -39,6 +39,8 @@ extern TCGv_i32 TCGV_HIGH_link_error(TCGv_i64);
 #define TCGV_HIGH TCGV_HIGH_link_error
 #endif
 
+extern int smp_cpus;
+
 /* Note that this is optimized for sequential allocation during translate.
    Up to and including filling in the forward link immediately.  We'll do
    proper termination of the end of the list after we finish translation.  */
@@ -148,8 +150,9 @@ void tcg_gen_op6(TCGContext *ctx, TCGOpcode opc, TCGArg a1, TCGArg a2,
 
 void tcg_gen_mb(TCGArg a)
 {
-    /* ??? Enable only when MTTCG is enabled.  */
-    tcg_gen_op1(&tcg_ctx, INDEX_op_mb, 0);
+    if (qemu_tcg_mttcg_enabled() && smp_cpus > 1) {
+        tcg_gen_op1(&tcg_ctx, INDEX_op_mb, 0);
+    }
 }
 
 /* 32 bit ops */
