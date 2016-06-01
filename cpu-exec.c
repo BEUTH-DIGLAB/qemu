@@ -29,6 +29,7 @@
 #include "qemu/rcu.h"
 #include "exec/tb-hash.h"
 #include "exec/log.h"
+#include "qemu/main-loop.h"
 #if defined(TARGET_I386) && !defined(CONFIG_USER_ONLY)
 #include "hw/i386/apic.h"
 #endif
@@ -460,6 +461,8 @@ static inline void cpu_handle_interrupt(CPUState *cpu,
     int interrupt_request = cpu->interrupt_request;
 
     if (unlikely(interrupt_request)) {
+        qemu_mutex_lock_iothread();
+
         if (unlikely(cpu->singlestep_enabled & SSTEP_NOIRQ)) {
             /* Mask out external interrupts for this step. */
             interrupt_request &= ~CPU_INTERRUPT_SSTEP_MASK;
@@ -514,6 +517,10 @@ static inline void cpu_handle_interrupt(CPUState *cpu,
                the program flow was changed */
             *last_tb = NULL;
         }
+
+        /* If we exited via cpu_loop_exit/longjmp this is reset in the main else leg */
+        qemu_mutex_unlock_iothread();
+
     }
     if (unlikely(cpu->exit_request || replay_has_interrupt())) {
         cpu->exit_request = 0;
@@ -642,8 +649,12 @@ int cpu_exec(CPUState *cpu)
             g_assert(cpu == current_cpu);
             g_assert(cc == CPU_GET_CLASS(cpu));
 #endif /* buggy compiler */
+
             cpu->can_do_io = 1;
             tb_lock_reset();
+            if (qemu_mutex_iothread_locked()) {
+                qemu_mutex_unlock_iothread();
+            }
         }
     } /* for(;;) */
 
