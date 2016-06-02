@@ -942,6 +942,7 @@ void run_on_cpu(CPUState *cpu, void (*func)(void *data), void *data)
 {
     struct qemu_work_item wi;
 
+    /* Always true when using tcg RR scheduling from a vCPU context */
     if (qemu_cpu_is_self(cpu)) {
         func(data);
         return;
@@ -1216,15 +1217,29 @@ static int tcg_cpu_exec(CPUState *cpu)
  * This is done explicitly rather than relying on side-effects
  * elsewhere.
  */
-static void qemu_cpu_kick_no_halt(void);
 #define TCG_KICK_FREQ (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + \
                        NANOSECONDS_PER_SECOND / 10)
+
+/* only used in single-thread tcg mode */
+static CPUState *tcg_current_rr_cpu;
+
+/* Kick the currently round-robin scheduled vCPU */
+static void qemu_cpu_kick_rr_cpu(void)
+{
+    CPUState *cpu;
+    do {
+        cpu = atomic_mb_read(&tcg_current_rr_cpu);
+        if (cpu) {
+            cpu_exit(cpu);
+        }
+    } while (cpu != atomic_mb_read(&tcg_current_rr_cpu));
+}
 
 static void kick_tcg_thread(void *opaque)
 {
     QEMUTimer *self = *(QEMUTimer **) opaque;
     timer_mod(self, TCG_KICK_FREQ);
-    qemu_cpu_kick_no_halt();
+    qemu_cpu_kick_rr_cpu();
 }
 
 static void *qemu_tcg_cpu_thread_fn(void *arg)
@@ -1274,6 +1289,7 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
         }
 
         for (; cpu != NULL && !exit_request; cpu = CPU_NEXT(cpu)) {
+            atomic_mb_set(&tcg_current_rr_cpu, cpu);
 
             qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
                               (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
@@ -1289,6 +1305,8 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
             }
 
         } /* for cpu.. */
+        /* Does not need atomic_mb_set because a spurious wakeup is okay.  */
+        atomic_set(&tcg_current_rr_cpu, NULL);
 
         /* Pairs with smp_wmb in qemu_cpu_kick.  */
         atomic_mb_set(&exit_request, 0);
@@ -1325,24 +1343,13 @@ static void qemu_cpu_kick_thread(CPUState *cpu)
 #endif
 }
 
-static void qemu_cpu_kick_no_halt(void)
-{
-    CPUState *cpu;
-    /* Ensure whatever caused the exit has reached the CPU threads before
-     * writing exit_request.
-     */
-    atomic_mb_set(&exit_request, 1);
-    cpu = atomic_mb_read(&tcg_current_cpu);
-    if (cpu) {
-        cpu_exit(cpu);
-    }
-}
-
 void qemu_cpu_kick(CPUState *cpu)
 {
     qemu_cond_broadcast(cpu->halt_cond);
     if (tcg_enabled()) {
-        qemu_cpu_kick_no_halt();
+        cpu_exit(cpu);
+        /* Also ensure current RR cpu is kicked */
+        qemu_cpu_kick_rr_cpu();
     } else {
         qemu_cpu_kick_thread(cpu);
     }
@@ -1383,7 +1390,7 @@ void qemu_mutex_lock_iothread(void)
         atomic_dec(&iothread_requesting_mutex);
     } else {
         if (qemu_mutex_trylock(&qemu_global_mutex)) {
-            qemu_cpu_kick_no_halt();
+            qemu_cpu_kick_rr_cpu();
             qemu_mutex_lock(&qemu_global_mutex);
         }
         atomic_dec(&iothread_requesting_mutex);
