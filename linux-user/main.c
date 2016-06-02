@@ -207,6 +207,7 @@ static inline void cpu_exec_end(CPUState *cpu)
     }
     exclusive_idle();
     pthread_mutex_unlock(&exclusive_lock);
+    cpu->exit_request = false;
 }
 
 void cpu_list_lock(void)
