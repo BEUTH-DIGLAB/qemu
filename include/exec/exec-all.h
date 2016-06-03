@@ -405,6 +405,4 @@ bool memory_region_is_unassigned(MemoryRegion *mr);
 /* vl.c */
 extern int singlestep;
 
-extern bool exit_request;
-
 #endif

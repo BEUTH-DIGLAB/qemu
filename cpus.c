@@ -1169,6 +1169,18 @@ static int64_t tcg_get_icount_limit(void)
     }
 }
 
+static void handle_icount_deadline(void)
+{
+    if (use_icount) {
+        int64_t deadline =
+            qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL);
+
+        if (deadline == 0) {
+            qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
+        }
+    }
+}
+
 static int tcg_cpu_exec(CPUState *cpu)
 {
     int ret;
@@ -1275,10 +1287,10 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
         timer_mod(kick_timer, TCG_KICK_FREQ);
     }
 
-    /* process any pending work */
-    atomic_mb_set(&exit_request, 1);
-
     cpu = first_cpu;
+
+    /* process any pending work */
+    atomic_mb_set(&cpu->exit_request, 1);
 
     while (1) {
         /* Account partial waits to QEMU_CLOCK_VIRTUAL.  */
@@ -1288,7 +1300,7 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
             cpu = first_cpu;
         }
 
-        for (; cpu != NULL && !exit_request; cpu = CPU_NEXT(cpu)) {
+        while (cpu && !cpu->exit_request) {
             atomic_mb_set(&tcg_current_rr_cpu, cpu);
 
             qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
@@ -1302,22 +1314,21 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
                 }
             } else if (cpu->stop || cpu->stopped) {
                 break;
+            } else if (cpu->exit_request) {
+                break;
             }
 
+            cpu = CPU_NEXT(cpu);
         } /* for cpu.. */
         /* Does not need atomic_mb_set because a spurious wakeup is okay.  */
         atomic_set(&tcg_current_rr_cpu, NULL);
 
-        /* Pairs with smp_wmb in qemu_cpu_kick.  */
-        atomic_mb_set(&exit_request, 0);
-
-        if (use_icount) {
-            int64_t deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL);
-
-            if (deadline == 0) {
-                qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
-            }
+        if (cpu && cpu->exit_request) {
+            atomic_mb_set(&cpu->exit_request, 0);
         }
+
+        handle_icount_deadline();
+
         qemu_tcg_wait_io_event(QTAILQ_FIRST(&cpus));
     }
 
