@@ -148,10 +148,10 @@ void tcg_gen_op6(TCGContext *ctx, TCGOpcode opc, TCGArg a1, TCGArg a2,
     tcg_emit_op(ctx, opc, pi);
 }
 
-void tcg_gen_mb(TCGArg a)
+void tcg_gen_mb(TCGArg mb_type)
 {
     if (qemu_tcg_mttcg_enabled() && smp_cpus > 1) {
-        tcg_gen_op1(&tcg_ctx, INDEX_op_mb, 0);
+        tcg_gen_op1(&tcg_ctx, INDEX_op_mb, mb_type);
     }
 }
 
