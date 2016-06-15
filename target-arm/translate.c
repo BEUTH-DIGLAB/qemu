@@ -8053,10 +8053,11 @@ static void disas_arm_insn(DisasContext *s, unsigned int insn)
                 return;
             case 4: /* dsb */
                 ARCH(7);
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
                 return;
             case 5: /* dmb */
                 ARCH(7);
-                tcg_gen_mb(TCG_MB_FULL);
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
                 return;
             case 6: /* isb */
                 /* We need to break the TB after this insn to execute
@@ -10404,9 +10405,10 @@ static int disas_thumb2_insn(CPUARMState *env, DisasContext *s, uint16_t insn_hw
                             gen_clrex(s);
                             break;
                         case 4: /* dsb */
+                            tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
                             break;
                         case 5: /* dmb */
-                            tcg_gen_mb(TCG_MB_FULL);
+                            tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
                             break;
                         case 6: /* isb */
                             /* We need to break the TB after this insn

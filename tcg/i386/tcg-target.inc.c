@@ -696,7 +696,7 @@ static inline void tcg_out_pushi(TCGContext *s, tcg_target_long val)
     }
 }
 
-static inline void tcg_out_mb(TCGContext *s)
+static inline void tcg_out_mb(TCGContext *s, TCGArg a0)
 {
     if (have_sse2) {
         /* mfence */
@@ -2146,7 +2146,8 @@ static inline void tcg_out_op(TCGContext *s, TCGOpcode opc,
         break;
 
     case INDEX_op_mb:
-        tcg_out_mb(s);
+        assert(args[0] != 0);
+        tcg_out_mb(s, args[0]);
         break;
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
