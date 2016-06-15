@@ -1767,7 +1767,7 @@ static const TCGTargetOpDef aarch64_op_defs[] = {
     { INDEX_op_muluh_i64, { "r", "r", "r" } },
     { INDEX_op_mulsh_i64, { "r", "r", "r" } },
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
     { -1 },
 };
 

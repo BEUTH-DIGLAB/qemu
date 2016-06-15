@@ -2294,7 +2294,7 @@ static const TCGTargetOpDef s390_op_defs[] = {
     { INDEX_op_movcond_i64, { "r", "r", "rC", "r", "0" } },
     { INDEX_op_deposit_i64, { "r", "0", "r" } },
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
     { -1 },
 };
 

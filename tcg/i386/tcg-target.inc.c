@@ -2213,7 +2213,7 @@ static const TCGTargetOpDef x86_op_defs[] = {
     { INDEX_op_add2_i32, { "r", "r", "0", "1", "ri", "ri" } },
     { INDEX_op_sub2_i32, { "r", "r", "0", "1", "ri", "ri" } },
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
 
 #if TCG_TARGET_REG_BITS == 32
     { INDEX_op_brcond2_i32, { "r", "r", "ri", "ri" } },

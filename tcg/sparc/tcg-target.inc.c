@@ -1558,7 +1558,7 @@ static const TCGTargetOpDef sparc_op_defs[] = {
     { INDEX_op_qemu_st_i32, { "sZ", "A" } },
     { INDEX_op_qemu_st_i64, { "SZ", "A" } },
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
     { -1 },
 };
 

@@ -255,7 +255,7 @@ static const TCGTargetOpDef tcg_target_op_defs[] = {
     { INDEX_op_bswap32_i32, { R, R } },
 #endif
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
     { -1 },
 };
 

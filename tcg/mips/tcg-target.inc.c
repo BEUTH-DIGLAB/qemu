@@ -1721,7 +1721,7 @@ static const TCGTargetOpDef mips_op_defs[] = {
     { INDEX_op_qemu_st_i64, { "SZ", "SZ", "SZ", "SZ" } },
 #endif
 
-    { INDEX_op_mb, { "r" } },
+    { INDEX_op_mb, { } },
     { -1 },
 };
 
