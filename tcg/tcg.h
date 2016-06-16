@@ -422,14 +422,6 @@ typedef enum {
     TCG_BAR_SC      = 128,
 } TCGBar;
 
-/* TCGOpmb args */
-#define TCG_MB_FULL             ((TCGArg)(0))
-#define TCG_MB_READ             ((TCGArg)(1))
-#define TCG_MB_WRITE            ((TCGArg)(2))
-#define TCG_MB_ACQUIRE          ((TCGArg)(3))
-#define TCG_MB_RELEASE          ((TCGArg)(4))
-
-
 /* Conditions.  Note that these are laid out for easy manipulation by
    the functions below:
      bit 0 is used for inverting;
