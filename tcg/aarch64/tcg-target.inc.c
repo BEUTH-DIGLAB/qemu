@@ -374,7 +374,9 @@ typedef enum {
     I3510_ANDS      = 0x6a000000,
 
     /* System instructions.  */
-    DMB_ISH         = 0xd5033bbf,
+    DMB_ISH         = 0xd50338bf,
+    DMB_LD          = 0x00000100,
+    DMB_ST          = 0x00000200,
 } AArch64Insn;
 
 static inline uint32_t tcg_in32(TCGContext *s)
@@ -972,6 +974,21 @@ static inline void tcg_out_addsub2(TCGContext *s, int ext, TCGReg rl,
     tcg_out_insn_3503(s, insn, ext, rh, ah, bh);
 
     tcg_out_mov(s, ext, orig_rl, rl);
+}
+
+static inline void tcg_out_mb(TCGContext *s, TCGArg a0)
+{
+    switch (a0 & TCG_MO_ALL) {
+    case TCG_MO_LD_LD:
+        tcg_out32(s, DMB_ISH | DMB_LD);
+        break;
+    case TCG_MO_ST_ST:
+        tcg_out32(s, DMB_ISH | DMB_ST);
+        break;
+    default:
+        tcg_out32(s, DMB_ISH | DMB_LD | DMB_ST);
+        break;
+    }
 }
 
 #ifdef CONFIG_SOFTMMU
@@ -1641,7 +1658,7 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc,
         break;
 
     case INDEX_op_mb:
-        tcg_out32(s, DMB_ISH);
+        tcg_out_mb(s, a0);
         break;
 
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
