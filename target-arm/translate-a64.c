@@ -1250,7 +1250,7 @@ static void handle_sync(DisasContext *s, uint32_t insn,
         return;
     case 4: /* DSB */
     case 5: /* DMB */
-        /* We don't emulate caches so barriers are no-ops */
+        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
         return;
     case 6: /* ISB */
         /* We need to break the TB after this insn to execute
@@ -1855,23 +1855,31 @@ static void disas_ldst_excl(DisasContext *s, uint32_t insn)
     }
     tcg_addr = read_cpu_reg_sp(s, rn, 1);
 
-    /* Note that since TCG is single threaded load-acquire/store-release
-     * semantics require no extra if (is_lasr) { ... } handling.
-     */
-
     if (is_excl) {
         if (!is_store) {
             s->is_ldex = true;
             gen_load_exclusive(s, rt, rt2, tcg_addr, size, is_pair);
+            if (is_lasr) {
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_ACQ);
+            }
         } else {
+            if (is_lasr) {
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_REL);
+            }
             gen_store_exclusive(s, rs, rt, rt2, tcg_addr, size, is_pair);
         }
     } else {
         TCGv_i64 tcg_rt = cpu_reg(s, rt);
         if (is_store) {
+            if (is_lasr) {
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_REL);
+            }
             do_gpr_st(s, tcg_rt, tcg_addr, size);
         } else {
             do_gpr_ld(s, tcg_rt, tcg_addr, size, false, false);
+            if (is_lasr) {
+                tcg_gen_mb(TCG_MO_ALL | TCG_BAR_ACQ);
+            }
         }
     }
 }

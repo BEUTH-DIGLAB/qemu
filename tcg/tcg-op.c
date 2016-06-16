@@ -150,9 +150,11 @@ void tcg_gen_op6(TCGContext *ctx, TCGOpcode opc, TCGArg a1, TCGArg a2,
 
 void tcg_gen_mb(TCGArg mb_type)
 {
+#ifndef CONFIG_USER_ONLY
     if (qemu_tcg_mttcg_enabled() && smp_cpus > 1) {
         tcg_gen_op1(&tcg_ctx, INDEX_op_mb, mb_type);
     }
+#endif
 }
 
 /* 32 bit ops */

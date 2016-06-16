@@ -699,10 +699,21 @@ static inline void tcg_out_pushi(TCGContext *s, tcg_target_long val)
 static inline void tcg_out_mb(TCGContext *s, TCGArg a0)
 {
     if (have_sse2) {
-        /* mfence */
-        tcg_out8(s, 0x0f);
-        tcg_out8(s, 0xae);
-        tcg_out8(s, 0xf0);
+        tcg_out16(s, 0x0fae);
+        switch (a0 & TCG_MO_ALL) {
+        case TCG_MO_LD_LD:
+            /* lfence */
+            tcg_out8(s, 0xe8);
+            break;
+        case TCG_MO_ST_ST:
+            /* sfence */
+            tcg_out8(s, 0xf8);
+            break;
+        default:
+            /* mfence */
+            tcg_out8(s, 0xf0);
+            break;
+        }
     } else {
         /* lock orl $0,0(%esp) */
         tcg_out8(s, 0xf0);
