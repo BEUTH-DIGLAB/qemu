@@ -827,6 +827,24 @@ static void tcg_out_call(TCGContext *s, tcg_insn_unit *dest)
     tcg_out_nop(s);
 }
 
+static void tcg_out_mb(TCGContext *s, TCGArg a0)
+{
+    uint8_t bar_opcode;
+    switch (a0 & TCG_MO_ALL) {
+    case TCG_MO_LD_LD:
+        bar_opcode = 0x5; 
+        break;
+    case TCG_MO_ST_ST:
+        bar_opcode = 0xa;
+        break;
+    default:
+        /* #StoreLoad | #LoadStore */
+        bar_opcode = 0xf;
+        break;
+    }
+    tcg_out32(s, MEMBAR | bar_opcode);
+}
+
 #ifdef CONFIG_SOFTMMU
 static tcg_insn_unit *qemu_ld_trampoline[16];
 static tcg_insn_unit *qemu_st_trampoline[16];
@@ -1453,8 +1471,7 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc,
 	break;
 
     case INDEX_op_mb:
-        /* membar #LoadLoad|#LoadStore|#StoreStore|#StoreLoad */
-        tcg_out32(s, MEMBAR | 15);
+        tcg_out_mb(s, a0);
         break;
 
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
