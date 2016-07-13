@@ -572,7 +572,7 @@ static bool swap_commutative2(TCGArg *p1, TCGArg *p2)
 /* Propagate constants and copies, fold constant expressions. */
 void tcg_optimize(TCGContext *s)
 {
-    int oi, oi_next, nb_temps, nb_globals;
+    int oi, oi_next, nb_temps, nb_globals, mb_type;
 
     /* Array VALS has an element for each temp.
        If this temp holds a constant then its value is kept in VALS' element.
@@ -1324,6 +1324,19 @@ void tcg_optimize(TCGContext *s)
                     }
                 }
             }
+            break;
+        }
+
+        /* Eliminate duplicate and unnecessary fence instructions */
+        switch (opc) {
+        case INDEX_op_mb:
+            if (mb_type == args[0]) {
+                /* Delete this fence op */
+                tcg_op_remove(s, op);
+            }
+            break;
+        default:
+            mb_type = -1;
             break;
         }
     }
