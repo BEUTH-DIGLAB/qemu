@@ -301,9 +301,8 @@ static inline void tlb_flush_by_mmuidx_all_cpus_synced(CPUState *cpu,
 #define CODE_GEN_AVG_BLOCK_SIZE 150
 #endif
 
-#if defined(_ARCH_PPC) \
+#if defined(_ARCH_PPC) || defined(__sparc__)    \
     || defined(__x86_64__) || defined(__i386__) \
-    || defined(__sparc__) || defined(__aarch64__) \
     || defined(__s390x__) || defined(__mips__) \
     || defined(CONFIG_TCG_INTERPRETER)
 /* NOTE: Direct jump patching must be atomic to be thread-safe. */
@@ -398,9 +397,6 @@ static inline void tb_set_jmp_target1(uintptr_t jmp_addr, uintptr_t addr)
     atomic_set((int32_t *)jmp_addr, disp / 2);
     /* no need to flush icache explicitly */
 }
-#elif defined(__aarch64__)
-void aarch64_tb_set_jmp_target(uintptr_t jmp_addr, uintptr_t addr);
-#define tb_set_jmp_target1 aarch64_tb_set_jmp_target
 #elif defined(__sparc__) || defined(__mips__)
 void tb_set_jmp_target1(uintptr_t jmp_addr, uintptr_t addr);
 #else
