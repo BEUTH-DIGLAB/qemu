@@ -652,7 +652,7 @@ bool qemu_clock_run_all_timers(void)
         progress |= qemu_clock_run_timers(type);
     }
 
-    qsim_run_timers = !progress;
+    //qsim_run_timers = !progress;
 
     return progress;
 }

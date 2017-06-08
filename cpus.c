@@ -1508,22 +1508,21 @@ static void tcg_exec_one(void)
     /* Account partial waits to QEMU_CLOCK_VIRTUAL.  */
     qemu_clock_warp(QEMU_CLOCK_VIRTUAL);
 
-    for (next_cpu = first_cpu; next_cpu != NULL ; next_cpu = CPU_NEXT(next_cpu)) {
-        if (next_cpu->cpu_index == qsim_id)
-            break;
-    }
-    CPUState *cpu = next_cpu;
+    for (next_cpu = first_cpu; next_cpu != NULL && !exit_request; next_cpu = CPU_NEXT(next_cpu)) {
+        if (next_cpu->cpu_index == qsim_id) {
+            CPUState *cpu = next_cpu;
 
-    qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
-                      (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
+            qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
+                              (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
 
-    if (cpu_can_run(cpu)) {
-        r = tcg_cpu_exec(cpu);
-        if (r == EXCP_DEBUG) {
-            cpu_handle_guest_debug(cpu);
+            if (cpu_can_run(cpu)) {
+                r = tcg_cpu_exec(cpu);
+                if (r == EXCP_DEBUG) {
+                    cpu_handle_guest_debug(cpu);
+                }
+            }
         }
     }
-
     exit_request = 0;
     if (!qsim_gen_callbacks)
         qsim_id = (qsim_id+1) % smp_cpus;

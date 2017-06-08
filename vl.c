@@ -1983,8 +1983,10 @@ uint64_t run(uint64_t insts)
 
     qsim_icount = insts;
 
+    //cpu_enable_ticks();
     swapcontext(&main_context, &qemu_context);
     checkcontext();
+    //cpu_disable_ticks();
 
     return insts - qsim_icount;
 }
@@ -1995,8 +1997,10 @@ uint64_t run_cpu(int cpu_id, uint64_t insts)
 
     qsim_icount = insts;
     qsim_id = cpu_id;
+    //cpu_enable_ticks();
     swapcontext(&main_context, &qemu_context);
     checkcontext();
+    //cpu_disable_ticks();
 
     return insts - qsim_icount;
 }
